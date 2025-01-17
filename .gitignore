@@ -172,5 +172,6 @@ cython_debug/
 
 .ruff_cache/
 tmp*
-data/
+data/*
 evals/
+!data/sharegpt_human_annotation.csv
