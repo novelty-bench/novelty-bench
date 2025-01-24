@@ -25,6 +25,7 @@ def summarize(df: pd.DataFrame, decay_rate=0.5) -> dict:
     summary["equivalence-classes-histogram"] = [
         int(counts.get(c, 0)) for c in range(1, 11)
     ]
+    summary["raw-quality-at-k"] = quality_at_k_arr
     summary["quality-at-k"] = quality_at_k_arr
     rbq = np.average(quality_at_k_arr, weights=decay_rate ** np.arange(10))
     summary["rank-biased-quality"] = rbq.item()
