@@ -21,20 +21,6 @@ Classify the following prompt based on these criteria, provide a brief explanati
 
 gpt4_tokenizer = tiktoken.encoding_for_model("gpt-4o")
 
-instances = (
-    load_dataset("theblackcat102/sharegpt-english", split="train")
-    .map(
-        lambda x: {"prompt": x["conversations"][0]["text"]},
-        remove_columns=["conversations", "lang"],
-    )
-    .filter(
-        lambda x: 5 <= len(gpt4_tokenizer.encode(x["prompt"])) <= 400,
-    )
-    .shuffle(seed=23)  # dev
-    .select(range(300))
-)
-
-
 class PromptClassification(BaseModel):
     explanation: str
     allows_diverse_responses: bool
@@ -43,6 +29,8 @@ class PromptClassification(BaseModel):
     asks_for_code: bool
     formatted: str
 
+    def chosen(self):
+        return self.allows_diverse_responses and self.is_english and self.is_clear and not self.asks_for_code
 
 async def classify_prompt(instance: dict) -> dict:
     """Classifies a single prompt and returns the result."""
@@ -51,7 +39,7 @@ async def classify_prompt(instance: dict) -> dict:
         {"role": "system", "content": SYS_PROMPT},
         {
             "role": "user",
-            "content": f"Prompt to evaluate: {prompt}\n\n",
+            "content": f"Prompt:\n{prompt}",
         },
     ]
 
@@ -63,12 +51,22 @@ async def classify_prompt(instance: dict) -> dict:
             temperature=0,
             response_format=PromptClassification,
         )
-        parsed_response = response.choices[0].message.parsed
-        assert parsed_response, "Failed to parse"
-        return instance | parsed_response.model_dump()
+        parsed = response.choices[0].message.parsed
+        assert parsed, "Failed to parse"
+        return instance | {
+            "chosen": parsed.chosen(), "formatted": parsed.formatted, "meta": {
+                "response": parsed.model_dump()
+            }
+        }
     except Exception as e:
         print(f"Error processing prompt '{prompt}': {e}")
-        return instance | {"error": str(e)}
+        return instance | {
+            "chosen": False,
+            "formatted": prompt,
+            "meta": {
+                "error": str(e)
+            }   
+        }
 
 
 async def process_prompts(instances, output_file):
@@ -85,7 +83,8 @@ async def process_prompts(instances, output_file):
 
 
 async def main():
-    output_file = "data/dev.jsonl"
+    instances = load_dataset("json", data_files="data/wildchat/test.jsonl", split="train")
+    output_file = "data/wildchat/test-filtered.jsonl"
     await process_prompts(instances, output_file)
     print("done")
 
