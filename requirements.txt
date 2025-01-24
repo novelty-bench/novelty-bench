@@ -4,3 +4,7 @@ ruff
 aiofiles
 altair
 tiktoken
+rouge-score
+protobuf
+bert_score
+evaluate

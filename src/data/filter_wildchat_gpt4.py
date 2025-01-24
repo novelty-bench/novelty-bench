@@ -54,7 +54,9 @@ async def classify_prompt(instance: dict) -> dict:
         parsed = response.choices[0].message.parsed
         assert parsed, "Failed to parse"
         return instance | {
-            "chosen": parsed.chosen(), "formatted": parsed.formatted, "meta": {
+            "chosen": parsed.chosen(), "prompt": parsed.formatted, 
+            "original_prompt": prompt,
+            "meta": {
                 "response": parsed.model_dump()
             }
         }
@@ -62,7 +64,8 @@ async def classify_prompt(instance: dict) -> dict:
         print(f"Error processing prompt '{prompt}': {e}")
         return instance | {
             "chosen": False,
-            "formatted": prompt,
+            "prompt": prompt,
+            "original_prompt": prompt,
             "meta": {
                 "error": str(e)
             }   

@@ -64,9 +64,9 @@ async def main():
     args = parser.parse_args()
 
     dataset = load_dataset(
-        "json", data_files="data/filtered_sharegpt_sample.jsonl", split="train"
+        "json", data_files="data/wildchat/dev-filtered.jsonl", split="train"
     )
-    prompts = dataset.filter(lambda x: x["label"] == 5)
+    prompts = dataset.filter(lambda x: x["chosen"])
 
     os.makedirs(f"evals/{args.model}", exist_ok=True)
 
