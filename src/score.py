@@ -10,10 +10,12 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 from tqdm.asyncio import tqdm
 
+from common import DATASETS
+
 CONCURRENT_REQUESTS = 50
 
 
-with open("/home/yimingz3/secrets/openai-api-key", "r") as file:
+with open("/home/yimingz3/secrets/openai-api-key") as file:
     client = AsyncOpenAI(api_key=file.read().strip())
 
 
@@ -31,7 +33,7 @@ async def score_partitions(prompt: str, partitions: list[list[str]]) -> list[int
             {
                 "role": "user",
                 "content": f"[Instruction]\nPlease act as an impartial judge and evaluate the quality of the response provided by an AI assistant to the user question displayed below. Your evaluation should consider factors such as the helpfulness, relevance, accuracy, depth, creativity, and level of detail of the response. Begin your evaluation by providing a short explanation. Be as objective as possible. After providing your explanation, you must rate the response on a scale of 1 to 10 with the provided JSON format.\n\n[Question]\n{prompt}\n\n[The Start of Assistant's Answer]\n{sample_response}\n[The End of Assistant's Answer]",
-            }
+            },
         ]
 
         try:
@@ -58,7 +60,8 @@ async def process_instances(instances, output_file):
         async def process_single_instance(instance):
             async with semaphore:
                 scores = await score_partitions(
-                    instance["prompt"], instance["partition"]
+                    instance["prompt"],
+                    instance["partition"],
                 )
                 return {**instance, "partition_scores": scores}
 
@@ -71,15 +74,19 @@ async def process_instances(instances, output_file):
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="gpt-4o-mini")
+    parser.add_argument("--data", default="curated", choices=DATASETS)
     args = parser.parse_args()
 
+    eval_dir = os.path.join(f"{args.data}-evals", args.model)
     instances = load_dataset(
-        "json", data_files=f"evals/{args.model}/partitions.jsonl", split="train"
+        "json",
+        data_files=os.path.join(eval_dir, "partitions.jsonl"),
+        split="train",
     )
 
     os.makedirs(f"evals/{args.model}", exist_ok=True)
 
-    output_file = f"evals/{args.model}/scores.jsonl"
+    output_file = os.path.join(eval_dir, "scores.jsonl")
     await process_instances(instances, output_file)
 
     print("done")

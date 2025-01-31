@@ -5,14 +5,14 @@ import os
 
 from aiofiles import open as aio_open
 from datasets import load_dataset
-from openai import AsyncOpenAI
 from tqdm.auto import tqdm
+
+from common import DATASETS, oai_client
 
 NUM_GENERATIONS = 10
 CONCURRENT_REQUESTS = 50
 
-with open("/home/yimingz3/secrets/openai-api-key", "r") as file:
-    client = AsyncOpenAI(api_key=file.read().strip())
+client = oai_client()
 
 
 async def run_generation(model: str, prompt: str) -> list[str]:
@@ -21,7 +21,7 @@ async def run_generation(model: str, prompt: str) -> list[str]:
         {
             "role": "user",
             "content": prompt,
-        }
+        },
     ]
     try:
         response = await client.chat.completions.create(
@@ -60,18 +60,18 @@ async def process_prompts(prompts, model, output_file):
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="gpt-4o-mini", help="OpenAI model to use")
+    parser.add_argument("--model", default="gpt-4o-mini")
+    parser.add_argument("--data", default="curated", choices=DATASETS)
     args = parser.parse_args()
 
-    dataset = load_dataset(
-        "json", data_files="data/wildchat/dev-filtered.jsonl", split="train"
-    )
-    prompts = dataset.filter(lambda x: x["chosen"])
+    dataset = load_dataset("json", data_files=DATASETS[args.data], split="train")
 
-    os.makedirs(f"evals/{args.model}", exist_ok=True)
+    # TODO: ensure no filtering needs to be done at this stage
+    eval_dir = os.path.join(f"{args.data}-evals", args.model)
+    os.makedirs(eval_dir, exist_ok=True)
 
-    output_file = f"evals/{args.model}/generations.jsonl"
-    await process_prompts(prompts, args.model, output_file)
+    output_file = os.path.join(eval_dir, "generations.jsonl")
+    await process_prompts(dataset, args.model, output_file)
 
     print("done")
 

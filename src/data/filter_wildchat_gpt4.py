@@ -8,7 +8,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 from tqdm.auto import tqdm
 
-with open("/home/yimingz3/secrets/openai-api-key", "r") as file:
+with open("/home/yimingz3/secrets/openai-api-key") as file:
     client = AsyncOpenAI(api_key=file.read().strip())
 
 SYS_PROMPT = """You are helping to select prompts for a benchmark that measures language models' ability to generate diverse, high-quality alternative answers. For a prompt to qualify, it should:
@@ -21,6 +21,7 @@ Classify the following prompt based on these criteria, provide a brief explanati
 
 gpt4_tokenizer = tiktoken.encoding_for_model("gpt-4o")
 
+
 class PromptClassification(BaseModel):
     explanation: str
     allows_diverse_responses: bool
@@ -30,7 +31,13 @@ class PromptClassification(BaseModel):
     formatted: str
 
     def chosen(self):
-        return self.allows_diverse_responses and self.is_english and self.is_clear and not self.asks_for_code
+        return (
+            self.allows_diverse_responses
+            and self.is_english
+            and self.is_clear
+            and not self.asks_for_code
+        )
+
 
 async def classify_prompt(instance: dict) -> dict:
     """Classifies a single prompt and returns the result."""
@@ -54,11 +61,10 @@ async def classify_prompt(instance: dict) -> dict:
         parsed = response.choices[0].message.parsed
         assert parsed, "Failed to parse"
         return instance | {
-            "chosen": parsed.chosen(), "prompt": parsed.formatted, 
+            "chosen": parsed.chosen(),
+            "prompt": parsed.formatted,
             "original_prompt": prompt,
-            "meta": {
-                "response": parsed.model_dump()
-            }
+            "meta": {"response": parsed.model_dump()},
         }
     except Exception as e:
         print(f"Error processing prompt '{prompt}': {e}")
@@ -66,9 +72,7 @@ async def classify_prompt(instance: dict) -> dict:
             "chosen": False,
             "prompt": prompt,
             "original_prompt": prompt,
-            "meta": {
-                "error": str(e)
-            }   
+            "meta": {"error": str(e)},
         }
 
 
@@ -86,7 +90,9 @@ async def process_prompts(instances, output_file):
 
 
 async def main():
-    instances = load_dataset("json", data_files="data/wildchat/test.jsonl", split="train")
+    instances = load_dataset(
+        "json", data_files="data/wildchat/test.jsonl", split="train"
+    )
     output_file = "data/wildchat/test-filtered.jsonl"
     await process_prompts(instances, output_file)
     print("done")

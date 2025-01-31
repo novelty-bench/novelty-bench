@@ -1,6 +1,5 @@
 import argparse
 import asyncio
-import functools
 import json
 import os
 import random
@@ -8,15 +7,15 @@ import random
 from aiofiles import open as aio_open
 from datasets import load_dataset
 from evaluate import load
-from openai import AsyncOpenAI
 from pydantic import BaseModel
 from rouge_score import rouge_scorer
 from tqdm.auto import tqdm
 
+from common import DATASETS, oai_client
+
 CONCURRENT_REQUESTS = 50
 
-with open("/home/yimingz3/secrets/openai-api-key", "r") as file:
-    client = AsyncOpenAI(api_key=file.read().strip())
+client = oai_client()
 
 rouge_scorer = rouge_scorer.RougeScorer(["rouge1"])
 bertscore = load("bertscore")
@@ -44,7 +43,7 @@ async def equivalence_check_gpt4(prompt: str, response_0: str, response_1: str) 
                     "Prompt: " + prompt,
                     "Response A: " + response_0,
                     "Response B: " + response_1,
-                ]
+                ],
             ),
         },
     ]
@@ -68,7 +67,9 @@ async def equivalence_check_lcs(prompt: str, response_0: str, response_1: str) -
 
 
 async def equivalence_check_bertscore(
-    prompt: str, response_0: str, response_1: str
+    prompt: str,
+    response_0: str,
+    response_1: str,
 ) -> bool:
     scores = bertscore.compute(
         predictions=[response_0],
@@ -79,7 +80,9 @@ async def equivalence_check_bertscore(
 
 
 async def partition_responses(
-    prompt: str, responses: list[str], equivalence_alg
+    prompt: str,
+    responses: list[str],
+    equivalence_alg,
 ) -> list[list[str]]:
     """Partitions responses into equivalence classes."""
     equivalence_classes = []
@@ -94,7 +97,9 @@ async def partition_responses(
 
         for j in range(i + 1, len(responses)):
             if not assigned[j] and await equivalence_alg(
-                prompt, random.choice(current_class), responses[j]
+                prompt,
+                random.choice(current_class),
+                responses[j],
             ):
                 current_class.append(responses[j])
                 assigned[j] = True
@@ -119,7 +124,9 @@ async def process_instances(instances, output_file, equivalence_alg):
         async def process_single_instance(instance):
             async with semaphore:
                 partition = await partition_responses(
-                    instance["prompt"], instance["generations"], equivalence_alg
+                    instance["prompt"],
+                    instance["generations"],
+                    equivalence_alg,
                 )
                 return {**instance, "partition": partition}
 
@@ -133,6 +140,7 @@ async def process_instances(instances, output_file, equivalence_alg):
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="gpt-4o-mini", help="OpenAI model to use")
+    parser.add_argument("--data", default="curated", choices=DATASETS)
     parser.add_argument(
         "--alg",
         default="bertscore",
@@ -141,14 +149,16 @@ async def main():
     )
     args = parser.parse_args()
     equivalence_alg = EQUIVALENCE_ALGS[args.alg]
+
+    eval_dir = os.path.join(f"{args.data}-evals", args.model)
     instances = load_dataset(
-        "json", data_files=f"evals/{args.model}/generations.jsonl", split="train"
+        "json",
+        data_files=os.path.join(eval_dir, "generations.jsonl"),
+        split="train",
     )
 
-    os.makedirs(f"evals/{args.model}", exist_ok=True)
-
     # Process instances and save results
-    output_file = f"evals/{args.model}/partitions.jsonl"
+    output_file = os.path.join(eval_dir, "partitions.jsonl")
     await process_instances(instances, output_file, equivalence_alg)
 
     print("done")
