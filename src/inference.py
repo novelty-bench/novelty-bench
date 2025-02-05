@@ -2,20 +2,36 @@ import argparse
 import asyncio
 import json
 import os
+import subprocess
+import sys
+import time
 
+import requests
 from aiofiles import open as aio_open
 from datasets import load_dataset
+from openai import AsyncOpenAI
 from tqdm.auto import tqdm
 
 from common import DATASETS, oai_client
 
-client = oai_client()
+
+def get_free_port():
+    """Finds a free port to use for the VLLM server."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
 
 
 async def run_generation(
-    model: str, prompt: str, num_generations: int, in_context: bool = False
+    client: AsyncOpenAI,
+    model: str,
+    prompt: str,
+    num_generations: int,
+    in_context: bool = False,
 ) -> list[str]:
-    """Generates responses for a single prompt."""
+    """Generates responses for a single prompt using vllm server or oai_client."""
     messages = [{"role": "user", "content": prompt}]
     responses = []
 
@@ -52,7 +68,13 @@ async def run_generation(
 
 
 async def process_prompts(
-    prompts, model, output_file, num_generations, concurrent_requests, in_context
+    prompts,
+    client,
+    model,
+    output_file,
+    num_generations,
+    concurrent_requests,
+    in_context,
 ):
     """Processes all prompts concurrently and writes results to a file."""
     async with aio_open(output_file, "w") as f:
@@ -61,7 +83,7 @@ async def process_prompts(
         async def process_single_prompt(prompt):
             async with semaphore:
                 generations = await run_generation(
-                    model, prompt["prompt"], num_generations, in_context
+                    client, model, prompt["prompt"], num_generations, in_context
                 )
                 return {
                     "id": prompt["id"],
@@ -79,6 +101,9 @@ async def process_prompts(
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="gpt-4o-mini")
+    parser.add_argument(
+        "--run-vllm", action="store_true", help="Run VLLM server locally"
+    )
     parser.add_argument("--data", default="curated", choices=DATASETS)
     parser.add_argument(
         "--in-context", action="store_true", help="Generate responses in context"
@@ -98,27 +123,60 @@ async def main():
     )
     args = parser.parse_args()
 
-    dataset = load_dataset("json", data_files=DATASETS[args.data], split="train")
+    # Determine base URL
 
-    # Set evaluation directory
-    eval_dir = (
-        args.eval_dir
-        if args.eval_dir
-        else os.path.join(f"{args.data}-evals", args.model)
-    )
-    os.makedirs(eval_dir, exist_ok=True)
+    # Start VLLM server if requested
+    if args.run_vllm:
+        free_port = get_free_port()
+        base_url = f"http://localhost:{free_port}/v1"
+        vllm_process = subprocess.Popen(
+            ["vllm", "serve", args.model, "--port", str(free_port)],
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+        )
+        # Block until VLLM server is available
+        while True:
+            try:
+                requests.get(base_url)
+                print("VLLM server is available")
+                break
+            except requests.ConnectionError:
+                pass
+            time.sleep(1)  # Wait for 1 second before retrying
+        client = AsyncOpenAI(api_key="EMPTY", base_url=base_url)
+        concurrent_requests = 9999
+    else:
+        assert "/" not in args.model, "you should probably be using --run-vllm"
+        client = oai_client()
+        concurrent_requests = args.concurrent_requests
+    try:
+        dataset = load_dataset("json", data_files=DATASETS[args.data], split="train")
 
-    output_file = os.path.join(eval_dir, "generations.jsonl")
-    await process_prompts(
-        dataset,
-        args.model,
-        output_file,
-        args.num_generations,
-        args.concurrent_requests,
-        args.in_context,
-    )
+        # Set evaluation directory
+        eval_dir = (
+            args.eval_dir
+            if args.eval_dir
+            else os.path.join(f"{args.data}-evals", args.model)
+        )
+        os.makedirs(eval_dir, exist_ok=True)
 
-    print("done")
+        output_file = os.path.join(eval_dir, "generations.jsonl")
+        await process_prompts(
+            dataset,
+            client,
+            args.model,
+            output_file,
+            args.num_generations,
+            concurrent_requests,
+            args.in_context,
+        )
+
+    finally:
+        # Stop VLLM server if it was started
+        if args.run_vllm:
+            vllm_process.terminate()
+            vllm_process.wait()
+            print("Stopped VLLM server")
 
 
 if __name__ == "__main__":
