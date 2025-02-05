@@ -173,7 +173,8 @@ cython_debug/
 .ruff_cache/
 tmp*
 data/*
-!data/sharegpt_human_annotation.csv
+!data/readme.txt
 !data/curated.jsonl
-!data/data.md
-*evals/
+!data/wildchat-1k.jsonl
+eval*/
+slurm_output/

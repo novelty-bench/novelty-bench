@@ -1,5 +1,5 @@
 import asyncio
-import pandas as pd
+import json
 
 import tiktoken
 from aiofiles import open as aio_open
@@ -8,11 +8,8 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 from tqdm.auto import tqdm
 
-def oai_client():
-    with open("/home/yimingz3/secrets/openai-api-key") as file:
-        return AsyncOpenAI(api_key=file.read().strip())
-
-client = oai_client()
+with open("/home/yimingz3/secrets/openai-api-key") as file:
+    client = AsyncOpenAI(api_key=file.read().strip())
 
 SYS_PROMPT = """You are helping select prompts for a benchmark that measures language models' ability to generate diverse, high-quality alternative answers. For a prompt to qualify, it should:
 1. Allow diverse responses: The prompt should enable multiple valid distinct responses. For example, a prompt that asks for a salmon recipe, a chess move in a given position, or a continuation of a story would allow diverse responses. In contrast, a prompt that asks for a specific fact, or a rewrite of input text would not.
@@ -79,39 +76,30 @@ async def classify_prompt(instance: dict) -> dict:
         }
 
 
+async def process_prompts(instances, output_file) -> float:
+    """Processes prompts concurrently and writes results to a file."""
+    corr = 0
+    async with aio_open(output_file, "w") as f:
+        tasks = []
 
-async def process_prompts(instances) -> list[dict]:
-    """Processes prompts concurrently and returns a list of results."""
-    semaphore = asyncio.Semaphore(50)
-    tasks = []
+        for instance in instances:
+            tasks.append(classify_prompt(instance))
 
-    async def process_single_prompt(instance):
-        async with semaphore:
-            return await classify_prompt(instance)
+        for task in tqdm(asyncio.as_completed(tasks), total=len(instances)):
+            result = await task
+            corr += 1 if result["chosen"] == result["human_label"] else 0
+            await f.write(json.dumps(result) + "\n")
 
-    for instance in instances:
-        tasks.append(process_single_prompt(instance))
-
-    results = []
-    for task in tqdm(asyncio.as_completed(tasks), total=len(instances)):
-        result = await task
-        results.append(result)
-
-    return results
+    return corr / len(instances)
 
 
 async def main():
     instances = load_dataset(
-        "json", data_files="data/wildchat/5k.jsonl", split="train"
+        "json", data_files="data/wildchat/human-agreement.jsonl", split="train"
     )
-    results = await process_prompts(instances)
-    data = pd.DataFrame(results)
-    data = data.sort_values(by="id")
-    data.to_json("data/wildchat/5k-filtered.jsonl", orient="records")
-    
-    chosen = data[data["chosen"]]
-    assert len(chosen) > 1000
-    chosen.sample(frac=1.0).head(1000).to_json("data/wildchat-1k.jsonl", lines=True, orient="records")
+    output_file = "data/wildchat/human-agreement-labeled.jsonl"
+    acc = await process_prompts(instances, output_file)
+    print(f"accuracy: {acc:.1%}", )
 
 
 if __name__ == "__main__":

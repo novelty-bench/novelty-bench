@@ -31,15 +31,15 @@ def main():
     )
 
     subset_df = subset.to_pandas().drop_duplicates(["id", "prompt"])
-    subset_df.to_json("data/wildchat/all.jsonl", lines=True, orient="records")
+    subset_df.to_json("data/wildchat/5k.jsonl", lines=True, orient="records")
     subset_df.iloc[0:5000].to_json(
-        "data/wildchat/benchmark.jsonl", lines=True, orient="records"
+        "data/wildchat/benchmark-no-labels.jsonl", lines=True, orient="records"
     )
     subset_df.iloc[5000:5100].to_json(
-        "data/wildchat/dev.jsonl", lines=True, orient="records"
+        "data/wildchat/dev-no-labels.jsonl", lines=True, orient="records"
     )
     subset_df.iloc[5100:5200].to_json(
-        "data/wildchat/test.jsonl", lines=True, orient="records"
+        "data/wildchat/test-no-labels.jsonl", lines=True, orient="records"
     )
 
 
