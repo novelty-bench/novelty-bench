@@ -7,12 +7,13 @@ import sys
 import time
 
 import requests
+import torch
 from aiofiles import open as aio_open
 from datasets import load_dataset
 from openai import AsyncOpenAI
 from tqdm.auto import tqdm
 
-from common import DATASETS, oai_client
+from common import DATASETS, oai_client, together_client
 
 
 def get_free_port():
@@ -29,42 +30,53 @@ async def run_generation(
     model: str,
     prompt: str,
     num_generations: int,
-    in_context: bool = False,
+    in_context: bool,
+    max_retries: int = 5,
 ) -> list[str]:
-    """Generates responses for a single prompt using vllm server or oai_client."""
     messages = [{"role": "user", "content": prompt}]
-    responses = []
-
-    try:
-        if in_context:
-            for _ in range(num_generations):
+    for attempt in range(max_retries):
+        responses = []
+        try:
+            if in_context:
+                for _ in range(num_generations):
+                    response = await client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        max_tokens=512,
+                        temperature=1.0,
+                    )
+                    new_response = response.choices[0].message.content
+                    responses.append(new_response)
+                    messages.append({"role": "assistant", "content": new_response})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": "Can you generate a different answer?",
+                        }
+                    )
+            else:
                 response = await client.chat.completions.create(
                     model=model,
                     messages=messages,
                     max_tokens=512,
                     temperature=1.0,
+                    n=num_generations,
                 )
-                new_response = response.choices[0].message.content
-                responses.append(new_response)
-                messages.append({"role": "assistant", "content": new_response})
-                messages.append(
-                    {"role": "user", "content": "Can you generate a different answer?"}
+                responses = [choice.message.content for choice in response.choices]
+
+            return responses
+
+        except Exception as e:
+            if attempt == max_retries - 1:  # Last attempt
+                print(
+                    f"Error generating response for prompt '{prompt}' after {max_retries} attempts: {e}"
                 )
-        else:
-            response = await client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=512,
-                temperature=1.0,
-                n=num_generations,
-            )
-            responses = [choice.message.content for choice in response.choices]
+                return []
 
-        return responses
-
-    except Exception as e:
-        print(f"Error generating response for prompt '{prompt}': {e}")
-        return []
+            # Exponential backoff
+            wait_time = 2**attempt  # 1, 2, 4, 8, 16 seconds
+            print(f"Attempt {attempt + 1} failed, retrying in {wait_time} seconds...")
+            await asyncio.sleep(wait_time)
 
 
 async def process_prompts(
@@ -102,7 +114,10 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="gpt-4o-mini")
     parser.add_argument(
-        "--run-vllm", action="store_true", help="Run VLLM server locally"
+        "--mode",
+        choices=["vllm", "openai", "together"],
+        default="openai",
+        help="Mode to run inference (vllm for local server, openai for API)",
     )
     parser.add_argument("--data", default="curated", choices=DATASETS)
     parser.add_argument(
@@ -123,14 +138,40 @@ async def main():
     )
     args = parser.parse_args()
 
-    # Determine base URL
+    dataset = load_dataset("json", data_files=DATASETS[args.data], split="train")
+    eval_dir = (
+        args.eval_dir
+        if args.eval_dir
+        else os.path.join(f"{args.data}-evals", args.model)
+    )
+    os.makedirs(eval_dir, exist_ok=True)
+    output_file = os.path.join(eval_dir, "generations.jsonl")
 
-    # Start VLLM server if requested
-    if args.run_vllm:
+    if os.path.exists(output_file):
+        existing_data = load_dataset("json", data_files=output_file, split="train")
+        # check output file has matching ids
+        if set(existing_data["id"]) == set(dataset["id"]):
+            print("Output file already exists with matching IDs. Skipping generation.")
+            return
+        else:
+            print("Output file exists but has different IDs. Overwriting.")
+
+    concurrent_requests = args.concurrent_requests
+    if args.mode == "vllm":
         free_port = get_free_port()
         base_url = f"http://localhost:{free_port}/v1"
         vllm_process = subprocess.Popen(
-            ["vllm", "serve", args.model, "--port", str(free_port)],
+            [
+                "vllm",
+                "serve",
+                args.model,
+                "--port",
+                str(free_port),
+                "--tensor-parallel-size",
+                str(torch.cuda.device_count()),
+                "--max-model-len",
+                "8192",
+            ],
             stdout=sys.stdout,
             stderr=sys.stderr,
         )
@@ -145,22 +186,12 @@ async def main():
             time.sleep(1)  # Wait for 1 second before retrying
         client = AsyncOpenAI(api_key="EMPTY", base_url=base_url)
         concurrent_requests = 9999
-    else:
-        assert "/" not in args.model, "you should probably be using --run-vllm"
+    elif args.mode == "openai":  # openai mode
+        assert "/" not in args.model, "Local model paths should use --mode vllm"
         client = oai_client()
-        concurrent_requests = args.concurrent_requests
+    elif args.mode == "together":
+        client = together_client()
     try:
-        dataset = load_dataset("json", data_files=DATASETS[args.data], split="train")
-
-        # Set evaluation directory
-        eval_dir = (
-            args.eval_dir
-            if args.eval_dir
-            else os.path.join(f"{args.data}-evals", args.model)
-        )
-        os.makedirs(eval_dir, exist_ok=True)
-
-        output_file = os.path.join(eval_dir, "generations.jsonl")
         await process_prompts(
             dataset,
             client,
@@ -173,7 +204,7 @@ async def main():
 
     finally:
         # Stop VLLM server if it was started
-        if args.run_vllm:
+        if args.mode == "vllm":
             vllm_process.terminate()
             vllm_process.wait()
             print("Stopped VLLM server")
