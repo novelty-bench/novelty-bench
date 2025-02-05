@@ -174,4 +174,6 @@ cython_debug/
 tmp*
 data/*
 !data/sharegpt_human_annotation.csv
+!data/curated.jsonl
+!data/data.md
 *evals/
