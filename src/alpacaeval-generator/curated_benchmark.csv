@@ -1,0 +1,101 @@
+Category,Prompt
+Creativity,Tell me a story in five sentences about a girl and her dog.
+Creativity,Tell me a story in five sentences about a boy and his dog.
+Creativity,Tell me the plot line in 5 sentences for a romcom movie set in rural Kansas for Easter.
+Creativity,Write a haiku about a whale and a walnut tree.
+Creativity,Write a short love poem with 4 lines.
+Creativity,Write a short poem of hatred with 4 lines.
+Creativity,Write a short fable about a lemur and a light bulb.
+Creativity,Your task is to write a short biography for a made-up historic figure. Your bio should include their birth and death date their profession and their greatest contribution.
+Creativity,I am working on a game where players act as a human child who falls into a magical underground world full of monsters and the goal is to find a way back to the surface. Come up with a type of monster and briefly describe its backstory.
+Creativity,I am working on a memoir of a computer science PhD student who worked on machine translation in the 1990s. Suggest a single title and nothing else.
+Creativity,Write a short story that has three main characters Alice Bob and Mallory.
+Creativity,Tell me a dad joke.
+Creativity,Tell me a funny joke.
+Creativity,Tell me a riddle.
+Creativity,Write an one-sentence happy new year text to my friend.
+Creativity,What would you invent to make the world a more interesting place to live in?
+Creativity,One thing you might find in a magical forest.
+Creativity,What is the top item you would add to a grocery list for a memorable shopping experience?
+Creativity,Imagine you are a time traveler who has just arrived in a new era. Describe the first thing you notice.
+Creativity,Generate a sound effect for a car passing by.
+Character & Entity Naming,I am working on a new D&D compaign and a need a name for a half-elf paladin who is pretending to be on the side of good but is secretely sabotaging the main heros.
+Character & Entity Naming,Name the dog character in my story about a loyal dog.
+Character & Entity Naming,Name the dog character owned by the heroine in my romantic short story about a loyal medium-sized mixed breed dog who has a fluffy scruffy tan coat.
+Character & Entity Naming,Suggest a name for a dappled-gray filly living in the mountains.
+Character & Entity Naming,I am playing Club Penguin and I finally was able to adopt my first puffle. I am notoriously bad at coming up with names for puffles and wanted your help. What is one name I should name my adopted puffle.
+Character & Entity Naming,Name one person of Indian Origin.
+Character & Entity Naming,I am naming my Indian son what one name should I name him? I get anxiety when given multiple options so please only give me one name.
+Product & Purchase Recommendations,I am buying a handbag for my mother. Name one handbag that I should buy. Just one.
+Product & Purchase Recommendations,What's the best car to get in 2023? Just give me one single suggestion. Otherwise I'll have decision paralysis.
+Product & Purchase Recommendations,Suggest a birthday gift for a friend's 25th birthday. Just one
+Product & Purchase Recommendations,I am doing online shopping for a high-quality summer dress. What are the first 3 stores/websites I should check out? Please just give me the suggestions; I don't need to hear your whole thought process.
+Product & Purchase Recommendations,I am doing online shopping for a new leather wallet. What's the first store/website I should check out? Please just give me one suggestion; I don't need to hear your whole thought process.
+Product & Purchase Recommendations,I would like you to recommend one graphics card for productivity and light gaming. My budget is $1000 USD.
+Product & Purchase Recommendations,What is the single best first phone for a teenager? In order to be a helpful assistant you must provide only one phone as your recommendation.
+Subjective Rankings & Opinions,What's a cool fact about the city of Pittsburgh?
+Subjective Rankings & Opinions,What's an uncool fact about the city of Pittsburgh?
+Subjective Rankings & Opinions,What's the one best thing about going on a vacation?
+Subjective Rankings & Opinions,What is the absolute worst thing about being a graduate student?
+Subjective Rankings & Opinions,What is the number one vacation destination in the world?
+Subjective Rankings & Opinions,What is the most popular vacation destination in the world?
+Subjective Rankings & Opinions,Which university graduate program in the world is the hardest to get into?
+Subjective Rankings & Opinions,Which US city has the worst quality of life?
+Subjective Rankings & Opinions,Which fruit makes the best pie filling?
+Subjective Rankings & Opinions,Which dog breed is the least well-suited for a first-time dog owner?
+Subjective Rankings & Opinions,What is the first thing to check when your car won't start?
+Subjective Rankings & Opinions,What is the main reason people don't get hired for a job?
+Subjective Rankings & Opinions,What's a saying that English teachers hate?
+Subjective Rankings & Opinions,Pick one: glass half full or glass half empty?
+Subjective Rankings & Opinions,Pick one: glass half empty or glass half full?
+Subjective Rankings & Opinions,Name one reputed job.
+Subjective Rankings & Opinions,Name one great dream job.
+Subjective Rankings & Opinions,What is the coolest unsolved problem to you?
+Subjective Rankings & Opinions,What is the best book of all time?
+Subjective Rankings & Opinions,What is your most challenging type of problem to solve?
+Subjective Rankings & Opinions,What is the coolest Pokémon from the second generation? Just give me one.
+Subjective Rankings & Opinions,I need you to give me the single best ice breaking question.
+Subjective Rankings & Opinions,What is the best mother's day gift? Your response should be one singular gift.
+Factual Knowledge,Name one UFC fighter.
+Factual Knowledge,List a capital city in Africa.
+Factual Knowledge,List a city in Africa.
+Factual Knowledge,Recipe for salmon
+Factual Knowledge,Give one popular name for a baby boy in Papua New Guinea.
+Factual Knowledge,Name one reputed publication in science.
+Factual Knowledge,Can you list 3 influential persons from the nineteenth century?
+Factual Knowledge,Can you list three cities worth visiting
+Factual Knowledge,Can you list three good television series?
+Factual Knowledge,What is a deity from Greek mythology?
+Factual Knowledge,Name a Spanish speaking country.
+Factual Knowledge,Name one movie star who was popular in the 90s.
+Factual Knowledge,Name one wild animal which is an omnivore.
+Factual Knowledge,Name any member of Pink Floyd.
+Factual Knowledge,Name one person who won the the Fields Medal.
+Factual Knowledge,Choose any Python framework in which I can build ResNet from scratch.
+Factual Knowledge,Name one cocktail I can make with rum.
+Factual Knowledge,Name a Harry Potter Book
+Factual Knowledge,Name one person who was involved in the American Revolution.
+Factual Knowledge,Name one style of combat sports.
+Factual Knowledge,Name a star other than the Sun.
+Factual Knowledge,What is a chemical process that absorbs heat?
+Factual Knowledge,Name one source of protein.
+Factual Knowledge,Name one well received book that often appears in top book lists.
+Factual Knowledge,What is the best-selling dystopian work?
+Factual Knowledge,Who is a popular writer?
+Factual Knowledge,Who is a renowned writer from Nigeria?
+Factual Knowledge,What is a favorite Arrowverse character?
+Random Generation & Selection,Pretend to pick a card from the top of a standard deck of cards. What card did you pick?
+Random Generation & Selection,Pick one random fruit and one random vegetable and list your choices.
+Random Generation & Selection,Randomly pick a prime number between 1 and 50.
+Random Generation & Selection,Roll a make-believe 20-sided die.
+Random Generation & Selection,Pick a random valid US zip code.
+Random Generation & Selection,Pick a number between 1 and 100. Now tell me what you picked.
+Random Generation & Selection,Pick an emoji at random.
+Random Generation & Selection,Pick a random chess move in response to 1.b3.
+Random Generation & Selection,Pick a random animal.
+Random Generation & Selection,Which 4-digit combination should I use for my lock?
+Random Generation & Selection,Which 4-digit lock combination is the safest?
+Random Generation & Selection,Suggest a strong 4 character password.
+Random Generation & Selection,Generate the safest first digit for my 12 digit password? Give me exactly one digit.
+Random Generation & Selection,Generate a 5 word passphrase separated by hyphens.
+Random Generation & Selection,Suggest another strong 4 character password.
