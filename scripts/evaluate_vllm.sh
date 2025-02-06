@@ -3,13 +3,16 @@
 #SBATCH --partition=preempt
 #SBATCH --requeue
 #SBATCH --output=slurm_output/logs_%j.out
-#SBATCH --gres=gpu:6000Ada:4
+#SBATCH --gres=gpu:L40S:4
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256GB
-#SBATCH --time=6:00:00
+#SBATCH --time=24:00:00
 #SBATCH --open-mode=append
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=yimingz3@cs.cmu.edu
+
+
+export VLLM_CONFIGURE_LOGGING=0
 
 # babel-specific NCCL fix.
 # TODO: remove for public release
@@ -17,10 +20,10 @@ if [[ "$(hostname)" =~ ^(babel-4-1|babel-4-1|babel-4-1|babel-4-1|babel-4-5|babel
   export NCCL_P2P_DISABLE=1
 fi
 
-while IFS= read -r model; do
+for model in "$@"; do
     for data in wildchat curated
     do
-        bash scripts/eval.sh $model eval/$data/$model --mode vllm --data $data
-        bash scripts/eval.sh $model eval-ic/$data/$model --mode vllm --in-context --data $data
+        bash scripts/eval.sh "$model" "eval/$data/$model" --mode vllm --data "$data"
+        bash scripts/eval.sh "$model" "eval-ic/$data/$model" --mode vllm --in-context --data "$data"
     done
-done < "scripts/VLLM_MODELS"
+done
