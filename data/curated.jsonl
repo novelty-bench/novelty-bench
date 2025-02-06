@@ -36,10 +36,10 @@
 {"id":"curated-35","category":"Subjective Rankings & Opinions","prompt":"What's an uncool fact about the city of Pittsburgh?"}
 {"id":"curated-36","category":"Subjective Rankings & Opinions","prompt":"What's the one best thing about going on a vacation?"}
 {"id":"curated-37","category":"Subjective Rankings & Opinions","prompt":"What is the absolute worst thing about being a graduate student?"}
-{"id":"curated-38","category":"Subjective Rankings & Opinions","prompt":"What is the number one vacation destination in the world?"}
-{"id":"curated-39","category":"Subjective Rankings & Opinions","prompt":"What is the most popular vacation destination in the world?"}
+{"id":"curated-38","category":"Subjective Rankings & Opinions","prompt":"Name the place you think is the top vacation destination in the world."}
+{"id":"curated-39","category":"Subjective Rankings & Opinions","prompt":"What is a popular vacation destination in the world?"}
 {"id":"curated-40","category":"Subjective Rankings & Opinions","prompt":"Which university graduate program in the world is the hardest to get into?"}
-{"id":"curated-41","category":"Subjective Rankings & Opinions","prompt":"Which US city has the worst quality of life?"}
+{"id":"curated-41","category":"Subjective Rankings & Opinions","prompt":"Which US city has terrible quality of life?"}
 {"id":"curated-42","category":"Subjective Rankings & Opinions","prompt":"Which fruit makes the best pie filling?"}
 {"id":"curated-43","category":"Subjective Rankings & Opinions","prompt":"Which dog breed is the least well-suited for a first-time dog owner?"}
 {"id":"curated-44","category":"Subjective Rankings & Opinions","prompt":"What is the first thing to check when your car won't start?"}
@@ -79,7 +79,7 @@
 {"id":"curated-78","category":"Factual Knowledge","prompt":"What is a chemical process that absorbs heat?"}
 {"id":"curated-79","category":"Factual Knowledge","prompt":"Name one source of protein."}
 {"id":"curated-80","category":"Factual Knowledge","prompt":"Name one well received book that often appears in top book lists."}
-{"id":"curated-81","category":"Factual Knowledge","prompt":"What is the best-selling dystopian work?"}
+{"id":"curated-81","category":"Factual Knowledge","prompt":"What is a best-selling dystopian book?"}
 {"id":"curated-82","category":"Factual Knowledge","prompt":"Who is a popular writer?"}
 {"id":"curated-83","category":"Factual Knowledge","prompt":"Who is a renowned writer from Nigeria?"}
 {"id":"curated-84","category":"Factual Knowledge","prompt":"What is a favorite Arrowverse character?"}
