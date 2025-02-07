@@ -54,7 +54,14 @@ async def score_partitions(prompt: str, partitions: list[list[str]]) -> list[int
 
 async def process_instances(instances, output_file):
     """Processes all instances concurrently and writes results to a file."""
-    async with aio_open(output_file, "w") as f:
+    # Check if file exists and has matching keys
+    if os.path.exists(output_file):
+        existing_output = load_dataset("json", data_files=output_file, split="train")
+        if not set(instances["id"]) - set(existing_output["id"]):
+            print("All prompts are scored. Skipping.")
+            return
+
+    async with aio_open(output_file, "w", buffering=1) as f:
         semaphore = asyncio.Semaphore(CONCURRENT_REQUESTS)
 
         async def process_single_instance(instance):
@@ -73,23 +80,23 @@ async def process_instances(instances, output_file):
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="gpt-4o-mini")
     parser.add_argument("--data", default="curated", choices=DATASETS)
+    parser.add_argument(
+        "--eval-dir", help="Directory containing evaluation files", required=True
+    )
     args = parser.parse_args()
 
-    eval_dir = os.path.join(f"{args.data}-evals", args.model)
+    eval_dir = args.eval_dir
     instances = load_dataset(
         "json",
         data_files=os.path.join(eval_dir, "partitions.jsonl"),
         split="train",
     )
 
-    os.makedirs(f"evals/{args.model}", exist_ok=True)
+    os.makedirs(eval_dir, exist_ok=True)
 
     output_file = os.path.join(eval_dir, "scores.jsonl")
     await process_instances(instances, output_file)
-
-    print("done")
 
 
 if __name__ == "__main__":

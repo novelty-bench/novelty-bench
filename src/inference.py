@@ -89,7 +89,7 @@ async def process_prompts(
     in_context,
 ):
     """Processes all prompts concurrently and writes results to a file."""
-    async with aio_open(output_file, "w") as f:
+    async with aio_open(output_file, "a", buffering=1) as f:
         semaphore = asyncio.Semaphore(concurrent_requests)
 
         async def process_single_prompt(prompt):
@@ -112,7 +112,10 @@ async def process_prompts(
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="gpt-4o-mini")
+    parser.add_argument("--model", required=True)
+    parser.add_argument(
+        "--eval-dir", help="Directory to save evaluation results", required=True
+    )
     parser.add_argument(
         "--mode",
         choices=["vllm", "openai", "together"],
@@ -123,7 +126,6 @@ async def main():
     parser.add_argument(
         "--in-context", action="store_true", help="Generate responses in context"
     )
-    parser.add_argument("--eval-dir", help="Directory to save evaluation results")
     parser.add_argument(
         "--num-generations",
         type=int,
@@ -148,13 +150,25 @@ async def main():
     output_file = os.path.join(eval_dir, "generations.jsonl")
 
     if os.path.exists(output_file):
-        existing_data = load_dataset("json", data_files=output_file, split="train")
-        # check output file has matching ids
-        if set(existing_data["id"]) == set(dataset["id"]):
-            print("Output file already exists with matching IDs. Skipping generation.")
+        existing_output = load_dataset("json", data_files=output_file, split="train")
+        existing_output = existing_output.filter(
+            lambda x: len(x["generations"]) == args.num_generations
+        )
+
+        # Save filtered dataset back to output file
+        with open(output_file, "w") as f:
+            for item in existing_output:
+                f.write(json.dumps(item) + "\n")
+
+        existing_keys = set(existing_output["id"])
+        # Filter dataset to only include missing or invalid items
+        dataset = dataset.filter(lambda x: x["id"] not in existing_keys)
+
+        if len(dataset) == 0:
+            print("All prompts have valid generations. Skipping.")
             return
         else:
-            print("Output file exists but has different IDs. Overwriting.")
+            print(f"Generating {len(dataset)} missing or invalid entries.")
 
     concurrent_requests = args.concurrent_requests
     if args.mode == "vllm":
@@ -185,7 +199,6 @@ async def main():
                 pass
             time.sleep(1)  # Wait for 1 second before retrying
         client = AsyncOpenAI(api_key="EMPTY", base_url=base_url)
-        concurrent_requests = 9999
     elif args.mode == "openai":  # openai mode
         assert "/" not in args.model, "Local model paths should use --mode vllm"
         client = oai_client()

@@ -11,7 +11,7 @@
 #SBATCH --mail-user=yimingz3@cs.cmu.edu
 
 for model in "$@"; do
-    for data in wildchat curated
+    for data in curated wildchat
     do
         bash scripts/eval.sh $model eval/$data/$model --mode together --data $data --concurrent-requests 10
         bash scripts/eval.sh $model eval-ic/$data/$model --mode together --in-context --data $data --concurrent-requests 10

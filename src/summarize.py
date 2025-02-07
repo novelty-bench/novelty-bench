@@ -44,11 +44,13 @@ def summarize(df: pd.DataFrame, decay_rate=0.5) -> dict:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="gpt-4o-mini")
     parser.add_argument("--data", default="curated", choices=DATASETS)
+    parser.add_argument(
+        "--eval-dir", help="Directory containing evaluation files", required=True
+    )
     args = parser.parse_args()
 
-    eval_dir = os.path.join(f"{args.data}-evals", args.model)
+    eval_dir = args.eval_dir
     df = pd.read_json(os.path.join(eval_dir, "scores.jsonl"), lines=True)
     summary = summarize(df)
     with open(os.path.join(eval_dir, "summary.json"), "w") as f:

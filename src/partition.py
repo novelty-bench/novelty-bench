@@ -118,7 +118,14 @@ EQUIVALENCE_ALGS = {
 
 async def process_instances(instances, output_file, equivalence_alg):
     """Processes all instances concurrently and writes results to a file."""
-    async with aio_open(output_file, "w") as f:
+    # Check if file exists and has matching keys
+    if os.path.exists(output_file):
+        existing_output = load_dataset("json", data_files=output_file, split="train")
+        if not set(instances["id"]) - set(existing_output["id"]):
+            print("All prompts have been partitioned. Skipping.")
+            return
+
+    async with aio_open(output_file, "w", buffering=1) as f:
         semaphore = asyncio.Semaphore(CONCURRENT_REQUESTS)
 
         async def process_single_instance(instance):
@@ -139,7 +146,6 @@ async def process_instances(instances, output_file, equivalence_alg):
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="gpt-4o-mini", help="OpenAI model to use")
     parser.add_argument("--data", default="curated", choices=DATASETS)
     parser.add_argument(
         "--alg",
@@ -147,10 +153,13 @@ async def main():
         help="Equivalence testing method",
         choices=EQUIVALENCE_ALGS,
     )
+    parser.add_argument(
+        "--eval-dir", help="Directory to save evaluation results", required=True
+    )
     args = parser.parse_args()
     equivalence_alg = EQUIVALENCE_ALGS[args.alg]
 
-    eval_dir = os.path.join(f"{args.data}-evals", args.model)
+    eval_dir = args.eval_dir
     instances = load_dataset(
         "json",
         data_files=os.path.join(eval_dir, "generations.jsonl"),
@@ -160,8 +169,6 @@ async def main():
     # Process instances and save results
     output_file = os.path.join(eval_dir, "partitions.jsonl")
     await process_instances(instances, output_file, equivalence_alg)
-
-    print("done")
 
 
 if __name__ == "__main__":
