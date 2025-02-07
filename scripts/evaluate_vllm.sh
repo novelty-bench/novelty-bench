@@ -2,7 +2,7 @@
 #SBATCH --job-name=sbb
 #SBATCH --partition=preempt
 #SBATCH --requeue
-#SBATCH --output=slurm_output/logs_%j.out
+#SBATCH --output=slurm_output/vllm_%j.out
 #SBATCH --gres=gpu:A100_80GB:2
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256GB
