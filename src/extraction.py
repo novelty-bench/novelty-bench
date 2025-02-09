@@ -203,7 +203,6 @@ def extract_pokemon(text: str) -> str:
 
 
 def extract_african_capital(text: str) -> str:
-    import unicodedata
     african_capitals = {
         "Algiers", "Cairo", "Tripoli", "Rabat", "Khartoum", "Tunis", "Laâyoune",
         "Porto-Novo", "Cotonou", "Ouagadougou", "Praia", "Yamoussoukro", "Abidjan",
