@@ -2,18 +2,18 @@ import argparse
 import asyncio
 import json
 import os
-import subprocess
-import sys
-import time
+from abc import ABC, abstractmethod
 
-import requests
-import torch
+import cohere
 from aiofiles import open as aio_open
+from anthropic import AsyncAnthropicVertex
 from datasets import load_dataset
+from google import genai
+from google.genai import types
 from openai import AsyncOpenAI
 from tqdm.auto import tqdm
 
-from common import DATASETS, oai_client, together_client
+from src.common import DATASETS, oai_client
 
 
 def get_free_port():
@@ -25,27 +25,127 @@ def get_free_port():
         return s.getsockname()[1]
 
 
+class InferenceService(ABC):
+    @abstractmethod
+    async def generate(
+        self, model: str, messages: list[dict[str, str]], **kwargs
+    ) -> list[str]: ...
+
+    def cleanup(self):
+        print("Done!")
+
+
+class OpenAIService(InferenceService):
+    def __init__(self):
+        self.client = oai_client()
+
+    async def generate(
+        self, model: str, messages: list[dict[str, str]], **kwargs
+    ) -> list[str]:
+        resp = await self.client.chat.completions.create(
+            model=model, messages=messages, **kwargs
+        )
+        return [c.message.content for c in resp.choices]
+
+
+class TogetherService(OpenAIService):
+    def __init__(self):
+        with open("/home/yimingz3/secrets/together-api-key") as file:
+            self.client = AsyncOpenAI(
+                api_key=file.read().strip(), base_url="https://api.together.xyz/v1"
+            )
+
+
+class VLLMService(OpenAIService):
+    def __init__(self, model: str):
+        port = int(os.environ["VLLM_PORT"])
+        self.client = AsyncOpenAI(api_key="EMPTY", base_url=f"http://localhost:{port}/v1")
+
+
+class CohereService(InferenceService):
+    def __init__(self):
+        with open("/home/yimingz3/secrets/cohere-api-key") as file:
+            self.client = cohere.AsyncClientV2(file.read().strip())
+
+    async def generate(
+        self, model: str, messages: list[dict[str, str]], n=1, **kwargs
+    ) -> list[str]:
+        responses = []
+        for _ in range(n):  # Cohere's API does not support parallel generation
+            resp = await self.client.chat(model=model, messages=messages, **kwargs)
+            responses.append(resp.message.content[0].text)
+        return responses
+
+
+class GeminiService(InferenceService):
+    def __init__(self):
+        with open("/home/yimingz3/secrets/gemini-api-key") as file:
+            self.client = genai.Client(api_key=file.read().strip())
+
+    async def generate(
+        self, model: str, messages: list[dict[str, str]], n=1, max_tokens=512, **kwargs
+    ) -> list[str]:
+        contents = [
+            types.Content(
+                parts=[types.Part(text=msg["content"])],
+                role="user" if msg["role"] == "user" else "model",
+            )
+            for msg in messages
+        ]
+        responses = []
+        for _ in range(n):
+            resp = await self.client.aio.models.generate_content(
+                model=model,
+                contents=contents,
+                config=genai.types.GenerateContentConfig(
+                    max_output_tokens=max_tokens, **kwargs
+                ),
+            )
+            if resp.candidates:
+                responses.append(resp.candidates[0].content.parts[0].text)
+            else:
+                responses.append("[Blocked]")
+
+        return responses
+
+
+class AnthropicService(InferenceService):
+    def __init__(self):
+        self.client = AsyncAnthropicVertex(region="us-east5", project_id="802374347260")
+
+    async def generate(
+        self, model: str, messages: list[dict[str, str]], n=1, **kwargs
+    ) -> list[str]:
+        responses = []
+        for _ in range(n):
+            resp = await self.client.messages.create(
+                model=model, messages=messages, **kwargs
+            )
+            responses.append(resp.content[0].text)
+        return responses
+
+
 async def run_generation(
-    client: AsyncOpenAI,
+    service: InferenceService,
     model: str,
     prompt: str,
     num_generations: int,
     in_context: bool,
-    max_retries: int = 5,
+    max_retries: int = 10,
 ) -> list[str]:
+    responses = []
     messages = [{"role": "user", "content": prompt}]
     for attempt in range(max_retries):
-        responses = []
         try:
             if in_context:
-                for _ in range(num_generations):
-                    response = await client.chat.completions.create(
+                while len(responses) < num_generations:
+                    response = await service.generate(
                         model=model,
                         messages=messages,
                         max_tokens=512,
                         temperature=1.0,
                     )
-                    new_response = response.choices[0].message.content
+                    new_response = response[0]
                     responses.append(new_response)
                     messages.append({"role": "assistant", "content": new_response})
                     messages.append(
@@ -55,33 +155,37 @@ async def run_generation(
                         }
                     )
             else:
-                response = await client.chat.completions.create(
+                # parallel generation w/o context
+                responses = await service.generate(
                     model=model,
                     messages=messages,
                     max_tokens=512,
                     temperature=1.0,
                     n=num_generations,
                 )
-                responses = [choice.message.content for choice in response.choices]
 
             return responses
 
         except Exception as e:
             if attempt == max_retries - 1:  # Last attempt
                 print(
-                    f"Error generating response for prompt '{prompt}' after {max_retries} attempts: {e}"
+                    f"Error generating response for prompt '{prompt}' after {max_retries} attempts: {e}",
+                    flush=True,
                 )
                 return []
 
             # Exponential backoff
-            wait_time = 2**attempt  # 1, 2, 4, 8, 16 seconds
-            print(f"Attempt {attempt + 1} failed, retrying in {wait_time} seconds...")
+            wait_time = min(5 * 2**attempt, 60)  # 5, 10, 20, 40, 60, 60, ... seconds
+            print(
+                f"Attempt {attempt + 1} failed, retrying in {wait_time} seconds...",
+                flush=True,
+            )
             await asyncio.sleep(wait_time)
 
 
 async def process_prompts(
     prompts,
-    client,
+    service,
     model,
     output_file,
     num_generations,
@@ -95,7 +199,7 @@ async def process_prompts(
         async def process_single_prompt(prompt):
             async with semaphore:
                 generations = await run_generation(
-                    client, model, prompt["prompt"], num_generations, in_context
+                    service, model, prompt["prompt"], num_generations, in_context
                 )
                 return {
                     "id": prompt["id"],
@@ -112,17 +216,19 @@ async def process_prompts(
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", required=True)
+    parser.add_argument(
+        "--mode",
+        choices=["vllm", "openai", "together", "cohere", "gemini", "anthropic"],
+        required=True,
+        help="Inference service provider (vllm for local server, openai for API, etc.)",
+    )
+    parser.add_argument("--model", required=True, help="Model to run inference with")
     parser.add_argument(
         "--eval-dir", help="Directory to save evaluation results", required=True
     )
     parser.add_argument(
-        "--mode",
-        choices=["vllm", "openai", "together"],
-        default="openai",
-        help="Mode to run inference (vllm for local server, openai for API)",
+        "--data", default="curated", choices=DATASETS, help="Source of prompts"
     )
-    parser.add_argument("--data", default="curated", choices=DATASETS)
     parser.add_argument(
         "--in-context", action="store_true", help="Generate responses in context"
     )
@@ -135,24 +241,24 @@ async def main():
     parser.add_argument(
         "--concurrent-requests",
         type=int,
-        default=50,
+        default=10,
         help="Number of concurrent requests",
     )
     args = parser.parse_args()
 
     dataset = load_dataset("json", data_files=DATASETS[args.data], split="train")
     eval_dir = (
-        args.eval_dir
-        if args.eval_dir
-        else os.path.join(f"{args.data}-evals", args.model)
+        args.eval_dir if args.eval_dir else os.path.join(f"{args.data}-evals", args.model)
     )
     os.makedirs(eval_dir, exist_ok=True)
     output_file = os.path.join(eval_dir, "generations.jsonl")
 
-    if os.path.exists(output_file):
+    if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+        dataset_keys = set(dataset["id"])
         existing_output = load_dataset("json", data_files=output_file, split="train")
         existing_output = existing_output.filter(
             lambda x: len(x["generations"]) == args.num_generations
+            and x["id"] in dataset_keys
         )
 
         # Save filtered dataset back to output file
@@ -172,42 +278,23 @@ async def main():
 
     concurrent_requests = args.concurrent_requests
     if args.mode == "vllm":
-        free_port = get_free_port()
-        base_url = f"http://localhost:{free_port}/v1"
-        vllm_process = subprocess.Popen(
-            [
-                "vllm",
-                "serve",
-                args.model,
-                "--port",
-                str(free_port),
-                "--tensor-parallel-size",
-                str(torch.cuda.device_count()),
-                "--max-model-len",
-                "8192",
-            ],
-            stdout=sys.stdout,
-            stderr=sys.stderr,
-        )
-        # Block until VLLM server is available
-        while True:
-            try:
-                requests.get(base_url)
-                print("VLLM server is available")
-                break
-            except requests.ConnectionError:
-                pass
-            time.sleep(1)  # Wait for 1 second before retrying
-        client = AsyncOpenAI(api_key="EMPTY", base_url=base_url)
+        service = VLLMService(args.model)
     elif args.mode == "openai":  # openai mode
-        assert "/" not in args.model, "Local model paths should use --mode vllm"
-        client = oai_client()
+        service = OpenAIService()
     elif args.mode == "together":
-        client = together_client()
+        service = TogetherService()
+    elif args.mode == "cohere":
+        service = CohereService()
+    elif args.mode == "gemini":
+        service = GeminiService()
+    elif args.mode == "anthropic":
+        service = AnthropicService()
+    else:
+        raise Exception(f"unknown service {service}")
     try:
         await process_prompts(
             dataset,
-            client,
+            service,
             args.model,
             output_file,
             args.num_generations,
@@ -216,11 +303,7 @@ async def main():
         )
 
     finally:
-        # Stop VLLM server if it was started
-        if args.mode == "vllm":
-            vllm_process.terminate()
-            vllm_process.wait()
-            print("Stopped VLLM server")
+        service.cleanup()
 
 
 if __name__ == "__main__":

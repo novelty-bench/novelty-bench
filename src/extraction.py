@@ -168,6 +168,7 @@ def extract_valid_chess_move(text: str) -> str:
     return ""
 
 
+
 def extract_five_words(text: str) -> str:
     pattern = r"\b[A-Za-z]+(?:-[A-Za-z]+){4}\b"
     match = re.search(pattern, text)

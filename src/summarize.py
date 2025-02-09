@@ -5,7 +5,7 @@ import os
 import numpy as np
 import pandas as pd
 
-from common import DATASETS
+from src.common import DATASETS
 
 
 def summarize(df: pd.DataFrame, decay_rate=0.5) -> dict:
