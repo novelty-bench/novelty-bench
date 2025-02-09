@@ -1,4 +1,5 @@
 import re
+import unicodedata
 
 
 def extract_five_digits(text: str) -> str:
@@ -173,7 +174,141 @@ def extract_five_words(text: str) -> str:
     return match.group() if match else ""
 
 
+def extract_pokemon(text: str) -> str:
+    pokemon_set = {
+        "Chikorita", "Bayleef", "Meganium", "Cyndaquil", "Quilava", "Typhlosion",
+        "Totodile", "Croconaw", "Feraligatr", "Sentret", "Furret", "Hoothoot",
+        "Noctowl", "Ledyba", "Ledian", "Spinarak", "Ariados", "Crobat",
+        "Chinchou", "Lanturn", "Pichu", "Cleffa", "Igglybuff", "Togepi",
+        "Togetic", "Natu", "Xatu", "Mareep", "Flaaffy", "Ampharos",
+        "Bellossom", "Marill", "Azumarill", "Sudowoodo", "Politoed",
+        "Hoppip", "Skiploom", "Jumpluff", "Aipom", "Sunkern", "Sunflora",
+        "Yanma", "Wooper", "Quagsire", "Espeon", "Umbreon", "Murkrow",
+        "Slowking", "Misdreavus", "Unown", "Wobbuffet", "Girafarig",
+        "Pineco", "Forretress", "Dunsparce", "Gligar", "Steelix",
+        "Snubbull", "Granbull", "Qwilfish", "Scizor", "Shuckle",
+        "Heracross", "Sneasel", "Teddiursa", "Ursaring", "Slugma",
+        "Magcargo", "Swinub", "Piloswine", "Corsola", "Remoraid",
+        "Octillery", "Delibird", "Mantine", "Skarmory", "Houndour",
+        "Houndoom", "Kingdra", "Phanpy", "Donphan", "Porygon2",
+        "Stantler", "Smeargle", "Tyrogue", "Hitmontop", "Smoochum",
+        "Elekid", "Magby", "Miltank", "Blissey", "Raikou", "Entei",
+        "Suicune", "Larvitar", "Pupitar", "Tyranitar", "Lugia",
+        "Ho-Oh", "Celebi",
+    }
+    for pokemon in pokemon_set:
+        if pokemon.lower() in text.lower():
+            return pokemon
+    return ""
+
+
+def extract_african_capital(text: str) -> str:
+    import unicodedata
+    african_capitals = {
+        "Algiers", "Cairo", "Tripoli", "Rabat", "Khartoum", "Tunis", "Laâyoune",
+        "Porto-Novo", "Cotonou", "Ouagadougou", "Praia", "Yamoussoukro", "Abidjan",
+        "Banjul", "Accra", "Conakry", "Bissau", "Monrovia", "Bamako", "Nouakchott",
+        "Niamey", "Abuja", "Dakar", "Freetown", "Lomé", "Luanda", "Yaoundé",
+        "Bangui", "N’Djamena", "Kinshasa", "Malabo", "Libreville", "Brazzaville",
+        "São Tomé", "Gitega", "Moroni", "Djibouti City", "Asmara", "Addis Ababa",
+        "Nairobi", "Antananarivo", "Lilongwe", "Port Louis", "Maputo", "Kigali",
+        "Victoria", "Mogadishu", "Juba", "Dodoma", "Kampala", "Lusaka", "Harare",
+        "Gaborone", "Mbabane", "Lobamba", "Maseru", "Windhoek", "Pretoria",
+        "Cape Town", "Bloemfontein",
+    }
+    normalized_text = "".join(
+        c for c in unicodedata.normalize("NFKD", text.lower()) if not unicodedata.combining(c)
+    )
+    for capital in african_capitals:
+        normalized_capital = "".join(
+            c for c in unicodedata.normalize("NFKD", capital.lower()) if not unicodedata.combining(c)
+        )
+        if normalized_capital in normalized_text:
+            return capital
+    return ""
+
+
+def extract_greek_deity(text: str) -> str:
+    greek_deities = {
+        "achlys", "chaos", "chronos", "ananke", "phanes", "gaia", "uranus",
+        "tartarus", "eros", "erebus", "nyx", "hemera", "aether", "ourea", "pontus",
+        "thalassa", "nesoi", "coeus", "crius", "cronus", "hyperion", "iapetus",
+        "mnemosyne", "oceanus", "phoebe", "rhea", "tethys", "theia", "themis",
+        "dione", "metis", "leto", "asteria", "zeus", "hera", "poseidon", "demeter",
+        "athena", "apollo", "artemis", "ares", "aphrodite", "hephaestus", "hermes",
+        "dionysus", "hestia", "hades", "persephone", "amphitrite", "triton",
+        "proteus", "nereus", "phorcys", "ceto", "thaumas", "leucothea", "palaemon",
+        "benthesikyme", "glaucus", "cymopoleia", "delphin", "eidothea", "actaeus",
+        "argyron", "atabyrius", "chalcon", "chryson", "damon", "damnameneus",
+        "dexithea", "skelmis", "halia", "eurybia", "telchines", "hecate",
+        "melinoe", "macaria", "menoetes", "charon", "thanatos", "hypnos",
+        "erinyes", "styx", "acheron", "cocytus", "lethe", "phlegethon", "orphne",
+        "nike", "kratos", "zelus", "bia", "eris", "nemesis", "tyche", "morpheus",
+        "phobos", "deimos", "eirene", "hesperus", "eosphorus", "pyroeis",
+        "phaethon", "phaenon", "ate", "apate", "philotes", "geras", "oizys",
+        "momus", "elpis", "dolos", "horcus", "aergia", "penia", "ponos", "algos",
+        "amekhania", "adikia", "dysnomia", "corus", "eucleia", "eupheme",
+        "eusebia", "pheme", "sophrosyne", "pan", "priapus", "aristaeus", "attis",
+        "britomartis", "corymbus", "comus", "daphnis", "silenus", "pitys", "carya",
+        "cranea", "oenoe", "orthannes", "asclepius", "hygieia", "iaso", "aceso",
+        "aegle", "epione", "paean", "telesphorus", "boreas", "zephyrus", "notus",
+        "eurus", "kaikias", "apeliotes", "skiron", "lips", "euronotus", "argestes",
+        "thrascias", "meses", "circios", "helios", "selene", "eos", "astraeus",
+        "astraea", "hespera", "hesperides", "calliope", "clio", "erato", "euterpe",
+        "melpomene", "polyhymnia", "terpsichore", "thalia", "urania", "aglaia",
+        "euphrosyne", "eunomia", "dike", "auxo", "carpo", "thallo", "orthosie",
+        "pherusa", "euporie", "sponde", "elete", "acte", "hegemone", "arctus",
+        "chesis", "phthinoporon", "clotho", "lachesis", "atropos", "daphne",
+        "echo", "calypso", "circe", "thetis", "amalthea", "arethusa", "dryope",
+        "eurydice", "galatea", "lampetia", "maia", "meliae", "minthe", "orseis",
+        "pitho", "plexaure", "rhode", "syrinx", "thaleia", "thelxinoe", "aegina",
+        "batea", "clytie", "alcyoneus", "porphyrion", "enceladus", "ephialtes",
+        "mimas", "cottus", "briareos", "gyges", "brontes", "steropes", "arges",
+        "adrasteia", "alectrona", "alexiares", "anicetus", "ceraon", "despoina",
+        "enodia", "harpocrates", "ichnaea", "mise", "trophonius", "tychon",
+    }
+    for word in text.split():
+        cleaned_word = re.sub(r"[^\w]", "", word)
+        if cleaned_word.lower() in greek_deities:
+            return cleaned_word
+    return ""
+
+
+def extract_spanish_speaking_countries(text: str) -> str:
+    spanish_speaking_countries = {
+        "argentina",
+        "bolivia",
+        "chile",
+        "colombia",
+        "costa rica",
+        "cuba",
+        "dominican republic",
+        "ecuador",
+        "el salvador",
+        "equatorial guinea",
+        "guatemala",
+        "honduras",
+        "mexico",
+        "nicaragua",
+        "panama",
+        "paraguay",
+        "peru",
+        "puerto rico",
+        "spain",
+        "uruguay",
+        "venezuela",
+    }
+    for word in text.split():
+        if word.lower() in spanish_speaking_countries:
+            return word
+    return ""
+
+
 EXTRACTION_RULES = {
+    "curated-54": extract_pokemon,
+    "curated-58": extract_african_capital,
+    "curated-66": extract_greek_deity,
+    "curated-67": extract_spanish_speaking_countries,
     "curated-70": extract_pink_floyd,
     "curated-74": extract_harry_potter_book,
     "curated-85": extract_random_card,
