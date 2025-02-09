@@ -178,3 +178,4 @@ data/*
 !data/wildchat-1k.jsonl
 eval*/
 slurm_output/
+*.tar.gz

@@ -7,12 +7,15 @@ from datasets import load_dataset
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from tqdm.auto import tqdm
+import os
 
 def oai_client():
     with open("/home/yimingz3/secrets/openai-api-key") as file:
         return AsyncOpenAI(api_key=file.read().strip())
 
-client = oai_client()
+openai_client = oai_client()
+llama_guard_client = AsyncOpenAI(api_key="EMPTY", base_url=f"http://localhost:{os.environ['VLLM_PORT']}/v1")
+
 
 SYS_PROMPT = """You are helping select prompts for a benchmark that measures language models' ability to generate diverse, high-quality alternative answers. For a prompt to qualify, it should:
 1. Allow diverse responses: The prompt should enable multiple valid distinct responses. For example, a prompt that asks for a salmon recipe, a chess move in a given position, or a continuation of a story would allow diverse responses. In contrast, a prompt that asks for a specific fact, or a rewrite of input text would not.
@@ -45,6 +48,14 @@ class PromptClassification(BaseModel):
 async def classify_prompt(instance: dict) -> dict:
     """Classifies a single prompt and returns the result."""
     prompt = instance["prompt"]
+    is_safe = (await llama_guard_client.chat.completions.create(
+            model="meta-llama/Llama-Guard-3-8B",
+            messages=[
+                {"content": prompt, "role": "user"},
+            ],
+            temperature=0.0
+    )).choices[0].message.content.strip() == "safe"
+    
     messages = [
         {"role": "system", "content": SYS_PROMPT},
         {
@@ -54,7 +65,7 @@ async def classify_prompt(instance: dict) -> dict:
     ]
 
     try:
-        response = await client.beta.chat.completions.parse(
+        response = await openai_client.beta.chat.completions.parse(
             model="gpt-4o-2024-08-06",
             messages=messages,
             max_tokens=512,
@@ -64,9 +75,10 @@ async def classify_prompt(instance: dict) -> dict:
         parsed = response.choices[0].message.parsed
         assert parsed, "Failed to parse"
         return instance | {
-            "chosen": parsed.chosen(),
+            "chosen": parsed.chosen() and is_safe,
             "prompt": parsed.formatted,
             "original_prompt": prompt,
+            "safety": is_safe,
             "meta": {"response": parsed.model_dump()},
         }
     except Exception as e:
@@ -75,6 +87,7 @@ async def classify_prompt(instance: dict) -> dict:
             "chosen": False,
             "prompt": prompt,
             "original_prompt": prompt,
+            "safety": is_safe,
             "meta": {"error": str(e)},
         }
 
@@ -109,9 +122,8 @@ async def main():
     data = data.sort_values(by="id")
     data.to_json("data/wildchat/5k-filtered.jsonl", orient="records")
     
-    chosen = data[data["chosen"]]
-    assert len(chosen) > 1000
-    chosen.sample(frac=1.0).head(1000).to_json("data/wildchat-1k.jsonl", lines=True, orient="records")
+    chosen = data[data["chosen"]].sample(frac=1.0).head(1000)
+    chosen.to_json("data/wildchat-1k.jsonl", lines=True, orient="records")
 
 
 if __name__ == "__main__":

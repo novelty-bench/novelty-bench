@@ -8,3 +8,6 @@ rouge-score
 protobuf
 bert_score
 evaluate
+cohere
+google-genai
+anthropic[vertex]

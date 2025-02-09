@@ -3,7 +3,7 @@ import json
 import os
 
 models = []
-for model_file in glob.glob("scripts/*_MODELS"):
+for model_file in glob.glob("model-lists/*"):
     with open(model_file) as f:
         models.extend(line.strip() for line in f if line.strip())
 
