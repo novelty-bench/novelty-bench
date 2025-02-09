@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from rouge_score import rouge_scorer
 from tqdm.auto import tqdm
 
-from common import DATASETS, oai_client
+from src.common import DATASETS, oai_client
 
 CONCURRENT_REQUESTS = 50
 

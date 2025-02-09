@@ -5,7 +5,6 @@ import os
 from abc import ABC, abstractmethod
 
 import cohere
-import pandas as pd
 from aiofiles import open as aio_open
 from anthropic import AsyncAnthropicVertex
 from datasets import load_dataset
@@ -14,7 +13,7 @@ from google.genai import types
 from openai import AsyncOpenAI
 from tqdm.auto import tqdm
 
-from common import DATASETS, oai_client
+from src.common import DATASETS, oai_client
 
 
 def get_free_port():
@@ -60,9 +59,7 @@ class TogetherService(OpenAIService):
 class VLLMService(OpenAIService):
     def __init__(self, model: str):
         port = int(os.environ["VLLM_PORT"])
-        self.client = AsyncOpenAI(
-            api_key="EMPTY", base_url=f"http://localhost:{port}/v1"
-        )
+        self.client = AsyncOpenAI(api_key="EMPTY", base_url=f"http://localhost:{port}/v1")
 
 
 class CohereService(InferenceService):
@@ -108,7 +105,7 @@ class GeminiService(InferenceService):
                 responses.append(resp.candidates[0].content.parts[0].text)
             else:
                 responses.append("[Blocked]")
-        
+
         return responses
 
 
@@ -251,9 +248,7 @@ async def main():
 
     dataset = load_dataset("json", data_files=DATASETS[args.data], split="train")
     eval_dir = (
-        args.eval_dir
-        if args.eval_dir
-        else os.path.join(f"{args.data}-evals", args.model)
+        args.eval_dir if args.eval_dir else os.path.join(f"{args.data}-evals", args.model)
     )
     os.makedirs(eval_dir, exist_ok=True)
     output_file = os.path.join(eval_dir, "generations.jsonl")
@@ -262,7 +257,8 @@ async def main():
         dataset_keys = set(dataset["id"])
         existing_output = load_dataset("json", data_files=output_file, split="train")
         existing_output = existing_output.filter(
-            lambda x: len(x["generations"]) == args.num_generations and x["id"] in dataset_keys
+            lambda x: len(x["generations"]) == args.num_generations
+            and x["id"] in dataset_keys
         )
 
         # Save filtered dataset back to output file

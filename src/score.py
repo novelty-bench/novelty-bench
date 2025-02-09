@@ -10,7 +10,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 from tqdm.asyncio import tqdm
 
-from common import DATASETS
+from src.common import DATASETS
 
 CONCURRENT_REQUESTS = 50
 

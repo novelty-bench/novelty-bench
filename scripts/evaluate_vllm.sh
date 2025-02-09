@@ -15,7 +15,7 @@
 export VLLM_CONFIGURE_LOGGING=0
 export OMP_NUM_THREADS=12
 
-trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM EXIT
+trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
 
 # babel-specific NCCL fix.
 # TODO: remove for public release

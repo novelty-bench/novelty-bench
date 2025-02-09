@@ -1,20 +1,23 @@
 import asyncio
-import pandas as pd
+import os
 
+import pandas as pd
 import tiktoken
-from aiofiles import open as aio_open
 from datasets import load_dataset
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from tqdm.auto import tqdm
-import os
+
 
 def oai_client():
     with open("/home/yimingz3/secrets/openai-api-key") as file:
         return AsyncOpenAI(api_key=file.read().strip())
 
+
 openai_client = oai_client()
-llama_guard_client = AsyncOpenAI(api_key="EMPTY", base_url=f"http://localhost:{os.environ['VLLM_PORT']}/v1")
+llama_guard_client = AsyncOpenAI(
+    api_key="EMPTY", base_url=f"http://localhost:{os.environ['VLLM_PORT']}/v1"
+)
 
 
 SYS_PROMPT = """You are helping select prompts for a benchmark that measures language models' ability to generate diverse, high-quality alternative answers. For a prompt to qualify, it should:
@@ -48,14 +51,16 @@ class PromptClassification(BaseModel):
 async def classify_prompt(instance: dict) -> dict:
     """Classifies a single prompt and returns the result."""
     prompt = instance["prompt"]
-    is_safe = (await llama_guard_client.chat.completions.create(
+    is_safe = (
+        await llama_guard_client.chat.completions.create(
             model="meta-llama/Llama-Guard-3-8B",
             messages=[
                 {"content": prompt, "role": "user"},
             ],
-            temperature=0.0
-    )).choices[0].message.content.strip() == "safe"
-    
+            temperature=0.0,
+        )
+    ).choices[0].message.content.strip() == "safe"
+
     messages = [
         {"role": "system", "content": SYS_PROMPT},
         {
@@ -92,7 +97,6 @@ async def classify_prompt(instance: dict) -> dict:
         }
 
 
-
 async def process_prompts(instances) -> list[dict]:
     """Processes prompts concurrently and returns a list of results."""
     semaphore = asyncio.Semaphore(50)
@@ -114,14 +118,12 @@ async def process_prompts(instances) -> list[dict]:
 
 
 async def main():
-    instances = load_dataset(
-        "json", data_files="data/wildchat/5k.jsonl", split="train"
-    )
+    instances = load_dataset("json", data_files="data/wildchat/5k.jsonl", split="train")
     results = await process_prompts(instances)
     data = pd.DataFrame(results)
     data = data.sort_values(by="id")
     data.to_json("data/wildchat/5k-filtered.jsonl", orient="records")
-    
+
     chosen = data[data["chosen"]].sample(frac=1.0).head(1000)
     chosen.to_json("data/wildchat-1k.jsonl", lines=True, orient="records")
 

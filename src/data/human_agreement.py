@@ -99,7 +99,9 @@ async def main():
     )
     output_file = "data/wildchat/human-agreement-labeled.jsonl"
     acc = await process_prompts(instances, output_file)
-    print(f"accuracy: {acc:.1%}", )
+    print(
+        f"accuracy: {acc:.1%}",
+    )
 
 
 if __name__ == "__main__":
