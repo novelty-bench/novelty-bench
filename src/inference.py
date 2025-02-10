@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import os
+import time
 from abc import ABC, abstractmethod
 
 import cohere
@@ -9,6 +10,7 @@ from aiofiles import open as aio_open
 from anthropic import AsyncAnthropicVertex
 from datasets import load_dataset
 from google import genai
+from google.auth import default, transport
 from google.genai import types
 from openai import AsyncOpenAI
 from tqdm.auto import tqdm
@@ -116,6 +118,35 @@ class AnthropicService(InferenceService):
         return responses
 
 
+class VertexService(InferenceService):
+    def __init__(self):
+        self.client, self.last_refreshed = self.refresh_client()
+
+    def refresh_client(self):
+        model_location = "us-central1"
+        project_id = "802374347260"
+        credentials, _ = default()
+        auth_request = transport.requests.Request()
+        credentials.refresh(auth_request)
+
+        client = AsyncOpenAI(
+            base_url=f"https://{model_location}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{model_location}/endpoints/openapi/chat/completions?",
+            api_key=credentials.token,
+        )
+        return client, time.time()
+
+    async def generate(
+        self, model: str, messages: list[dict[str, str]], n=1, **kwargs
+    ) -> list[str]:
+        if time.time() - self.last_refreshed > 1800:
+            self.client, self.last_refreshed = self.refresh_client()
+
+        resp = await self.client.chat.completions.create(
+            model=model, messages=messages, **kwargs
+        )
+        return [c.message.content for c in resp.choices]
+
+
 async def run_generation(
     service: InferenceService,
     model: str,
@@ -209,7 +240,7 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
-        choices=["vllm", "openai", "together", "cohere", "gemini", "anthropic"],
+        choices=["vllm", "openai", "together", "cohere", "gemini", "anthropic", "vertex"],
         required=True,
         help="Inference service provider (vllm for local server, openai for API, etc.)",
     )
@@ -280,6 +311,8 @@ async def main():
         service = GeminiService()
     elif args.mode == "anthropic":
         service = AnthropicService()
+    elif args.mode == "vertex":
+        service = VertexService()
     else:
         raise Exception(f"unknown service {service}")
     try:
