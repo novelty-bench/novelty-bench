@@ -16,15 +16,6 @@ from tqdm.auto import tqdm
 from src.common import DATASETS, oai_client
 
 
-def get_free_port():
-    """Finds a free port to use for the VLLM server."""
-    import socket
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
-
-
 class InferenceService(ABC):
     @abstractmethod
     async def generate(

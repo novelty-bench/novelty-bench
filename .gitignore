@@ -179,3 +179,4 @@ data/*
 eval*/
 slurm_output/
 *.tar.gz
+.vscode/

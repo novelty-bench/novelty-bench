@@ -10,7 +10,7 @@
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=yimingz3@cs.cmu.edu
 
-concurrent=20
+concurrent=5
 for model in "$@"; do
     for data in curated wildchat
     do

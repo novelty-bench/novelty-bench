@@ -1,7 +1,6 @@
 #!/bin/bash
 
-for source in vllm
-# for source in openai anthropic gemini together vllm
+for source in openai anthropic cohere gemini together vllm
 do
     for model in $(cat model-lists/${source^^}_MODELS)
     do
