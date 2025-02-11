@@ -6,7 +6,7 @@ models = []
 for model_file in glob.glob("model-lists/*"):
     with open(model_file) as f:
         prefix = ""
-        for model_type in ["ANTHROPIC", "COHERE", "GEMINI", "OPENAI"]:
+        for model_type in ["ANTHROPIC", "COHERE", "GEMINI", "OPENAI", "VERTEX"]:
             if model_type in model_file:
                 prefix = model_type.lower() + "/"
         models.extend(prefix + line.strip() for line in f if line.strip())

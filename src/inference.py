@@ -138,13 +138,15 @@ class VertexService(InferenceService):
     async def generate(
         self, model: str, messages: list[dict[str, str]], n=1, **kwargs
     ) -> list[str]:
-        if time.time() - self.last_refreshed > 1800:
-            self.client, self.last_refreshed = self.refresh_client()
-
-        resp = await self.client.chat.completions.create(
-            model=model, messages=messages, **kwargs
-        )
-        return [c.message.content for c in resp.choices]
+        responses = []
+        for _ in range(n):
+            if time.time() - self.last_refreshed > 1800:
+                self.client, self.last_refreshed = self.refresh_client()
+            resp = await self.client.chat.completions.create(
+                model=model, messages=messages, **kwargs
+            )
+            responses.append(resp.choices[0].message.content)
+        return responses
 
 
 async def run_generation(
