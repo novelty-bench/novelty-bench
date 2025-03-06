@@ -1,15 +1,20 @@
 import argparse
 import asyncio
+import functools
 import json
 import os
 import random
 
+import numpy as np
+import sacrebleu
+import torch
 from aiofiles import open as aio_open
 from datasets import load_dataset
 from evaluate import load
 from pydantic import BaseModel
 from rouge_score import rouge_scorer
 from tqdm.auto import tqdm
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from src.common import DATASETS, oai_client
 
@@ -18,12 +23,126 @@ CONCURRENT_REQUESTS = 50
 client = oai_client()
 
 rouge_scorer = rouge_scorer.RougeScorer(["rouge1"])
-bertscore = load("bertscore")
+bertscorer = load("bertscore")
 
 
-def rouge1(s1: str, s2: str):
+@functools.cache
+def load_deberta_tokenizer_and_model():
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base")
+    model = AutoModelForSequenceClassification.from_pretrained(
+        "microsoft/deberta-v3-base", num_labels=2
+    ).to(DEVICE)
+    model.load_state_dict(torch.load("models/similarity-classifier/model.pt"))
+    return tokenizer, model
+
+
+async def bleu(prompt: str, s1: str, s2: str):
+    return (
+        sacrebleu.corpus_bleu([s1], [[s2]]).score
+        + sacrebleu.corpus_bleu([s2], [[s1]]).score
+    ) / 200
+
+
+async def rouge1(prompt: str, s1: str, s2: str):
     rouge_eval = rouge_scorer.score(s1, s2)
     return rouge_eval["rouge1"].fmeasure
+
+
+async def bertscore(prompt: str, s1: str, s2: str):
+    return bertscorer.compute(
+        predictions=[s1],
+        references=[s2],
+        model_type="microsoft/deberta-large",
+    )["f1"][0]
+
+
+@torch.inference_mode()
+async def classifier_score(prompt: str, s1: str, s2: str):
+    tokenizer, model = load_deberta_tokenizer_and_model()
+    input_ids = [tokenizer.cls_token_id]
+    for s in [s1, s2]:
+        input_ids.extend(
+            tokenizer.encode(
+                s,
+                truncation=True,
+                max_length=128,
+                add_special_tokens=False,
+            )
+        )
+        input_ids.append(tokenizer.sep_token_id)
+        prompt_len = input_ids.index(tokenizer.sep_token_id) + 1
+    token_type_ids = [0] * prompt_len + [1] * (len(input_ids) - prompt_len)
+
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    iids = torch.tensor(input_ids, device=DEVICE, dtype=torch.int64)
+    tids = torch.tensor(token_type_ids, device=DEVICE, dtype=torch.int64)
+
+    outputs = model(input_ids=iids.unsqueeze(0), token_type_ids=tids.unsqueeze(0))
+    score = outputs["logits"].softmax(-1)[0, 1]
+    return score.cpu().item()
+
+
+async def gpt4o_mini_score(prompt: str, s1: str, s2: str):
+    SYS_PROMPT = 'Below, you will see two responses to the a prompt. Determine if the two responses are meaningfully different, so that a user who has seen one of the responses would likely benefit from seeing the other. Output "Similar" or "Different" only.'
+
+    completion = await client.chat.completions.create(
+        model="ft:gpt-4o-mini-2024-07-18:lti-carnegie-mellon-university::B7serxIF",
+        messages=[
+            {"role": "system", "content": SYS_PROMPT},
+            {
+                "role": "user",
+                "content": f"====== Prompt ======\n{prompt}\n\n====== Response 1 ======\n{s1}\n\n====== Response 2 ======\n{s2}",
+            },
+        ],
+        temperature=0.0,
+        logprobs=True,
+        top_logprobs=10,
+        max_tokens=1,
+    )
+
+    logit_similar = logit_different = -99
+    for logprob in completion.choices[0].logprobs.content[0].top_logprobs:
+        if logprob.token == "Similar":
+            logit_similar = logprob.logprob
+        if logprob.token == "Different":
+            logit_different = logprob.logprob
+
+    probs = np.exp([logit_similar, logit_different])
+    probs = probs / probs.sum()
+    p_similar = probs[0]
+    return p_similar
+
+
+async def gpt35_turbo_score(prompt: str, s1: str, s2: str):
+    SYS_PROMPT = 'Below, you will see two responses to the a prompt. Determine if the two responses are meaningfully different, so that a user who has seen one of the responses would likely benefit from seeing the other. Output "Similar" or "Different" only.'
+
+    completion = await client.chat.completions.create(
+        model="ft:gpt-3.5-turbo-0125:lti-carnegie-mellon-university::B7sns97b",
+        messages=[
+            {"role": "system", "content": SYS_PROMPT},
+            {
+                "role": "user",
+                "content": f"====== Prompt ======\n{prompt}\n\n====== Response 1 ======\n{s1}\n\n====== Response 2 ======\n{s2}",
+            },
+        ],
+        temperature=0.0,
+        logprobs=True,
+        top_logprobs=10,
+        max_tokens=1,
+    )
+
+    logit_similar = logit_different = -99
+    for logprob in completion.choices[0].logprobs.content[0].top_logprobs:
+        if logprob.token == "Similar":
+            logit_similar = logprob.logprob
+        if logprob.token == "Different":
+            logit_different = logprob.logprob
+
+    probs = np.exp([logit_similar, logit_different])
+    probs = probs / probs.sum()
+    p_similar = probs[0]
+    return p_similar
 
 
 async def equivalence_check_gpt4(prompt: str, response_0: str, response_1: str) -> bool:
@@ -71,11 +190,7 @@ async def equivalence_check_bertscore(
     response_0: str,
     response_1: str,
 ) -> bool:
-    scores = bertscore.compute(
-        predictions=[response_0],
-        references=[response_1],
-        model_type="microsoft/deberta-large",
-    )
+    scores = bertscore(response_0, response_1)
     return scores["f1"][0] > 0.7
 
 

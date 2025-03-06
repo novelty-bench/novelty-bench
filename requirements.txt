@@ -11,3 +11,6 @@ evaluate
 cohere
 google-genai
 anthropic[vertex]
+scikit-learn
+accelerate>=0.26.0
+sacrebleu
