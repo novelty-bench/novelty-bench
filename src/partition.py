@@ -3,7 +3,6 @@ import asyncio
 import functools
 import json
 import os
-import random
 
 import numpy as np
 import sacrebleu
@@ -18,7 +17,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from src.common import DATASETS, oai_client
 
-CONCURRENT_REQUESTS = 50
+CONCURRENT_REQUESTS = 1
 
 client = oai_client()
 
@@ -29,11 +28,12 @@ bertscorer = load("bertscore")
 @functools.cache
 def load_deberta_tokenizer_and_model():
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-    tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base")
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-large")
     model = AutoModelForSequenceClassification.from_pretrained(
-        "microsoft/deberta-v3-base", num_labels=2
+        "yimingzhang/deberta-v3-large-generation-similarity"
     ).to(DEVICE)
-    model.load_state_dict(torch.load("models/similarity-classifier/model.pt"))
+    # model.load_state_dict(torch.load("models/similarity-classifier-dev6/model.pt"))
+    model.eval()
     return tokenizer, model
 
 
@@ -181,8 +181,10 @@ async def equivalence_check_gpt4(prompt: str, response_0: str, response_1: str) 
         return False
 
 
-async def equivalence_check_lcs(prompt: str, response_0: str, response_1: str) -> bool:
-    return rouge1(response_0, response_1) > 0.5
+async def equivalence_check_unigram(
+    prompt: str, response_0: str, response_1: str
+) -> bool:
+    return await rouge1(prompt, response_0, response_1) > 0.458
 
 
 async def equivalence_check_bertscore(
@@ -190,55 +192,69 @@ async def equivalence_check_bertscore(
     response_0: str,
     response_1: str,
 ) -> bool:
-    scores = bertscore(response_0, response_1)
-    return scores["f1"][0] > 0.7
+    scores = await bertscore(prompt, response_0, response_1)
+    return scores["f1"][0] > 0.719
+
+
+async def equivalence_check_classifier(
+    prompt: str,
+    response_0: str,
+    response_1: str,
+) -> bool:
+    score = await classifier_score(prompt, response_0, response_1)
+    return score > 0.102
 
 
 async def partition_responses(
     prompt: str,
     responses: list[str],
     equivalence_alg,
-) -> list[list[str]]:
+) -> list[int]:
     """Partitions responses into equivalence classes."""
     equivalence_classes = []
-    assigned = [False] * len(responses)
+    partition = [-1] * len(responses)
 
     for i in range(len(responses)):
-        if assigned[i]:
+        if partition[i] >= 0:
             continue
 
         current_class = [responses[i]]
-        assigned[i] = True
+        partition[i] = len(equivalence_classes)
 
         for j in range(i + 1, len(responses)):
-            if not assigned[j] and await equivalence_alg(
+            if partition[j] == -1 and await equivalence_alg(
                 prompt,
-                random.choice(current_class),
+                current_class[0],
                 responses[j],
             ):
                 current_class.append(responses[j])
-                assigned[j] = True
+                partition[j] = len(equivalence_classes)
 
         equivalence_classes.append(current_class)
 
-    return sorted(equivalence_classes, key=len, reverse=True)
+    assert all(p >= 0 for p in partition)
+    return partition
 
 
 EQUIVALENCE_ALGS = {
     "gpt4": equivalence_check_gpt4,
-    "lcs": equivalence_check_lcs,
+    "unigram": equivalence_check_unigram,
     "bertscore": equivalence_check_bertscore,
+    "classifier": equivalence_check_classifier,
 }
 
 
 async def process_instances(instances, output_file, equivalence_alg):
     """Processes all instances concurrently and writes results to a file."""
     # Check if file exists and has matching keys
-    if os.path.exists(output_file):
-        existing_output = load_dataset("json", data_files=output_file, split="train")
-        if not set(instances["id"]) - set(existing_output["id"]):
-            print("All prompts have been partitioned. Skipping.")
-            return
+    # if os.path.exists(output_file):
+    #     try:
+    #         existing_output = load_dataset("json", data_files=output_file, split="train")
+    #         if not set(instances["id"]) - set(existing_output["id"]):
+    #             print("All prompts have been partitioned. Skipping.")
+    #             return
+    #     except datasets.exceptions.DatasetGenerationError:
+    #         ...
 
     async with aio_open(output_file, "w", buffering=1) as f:
         semaphore = asyncio.Semaphore(CONCURRENT_REQUESTS)
@@ -250,7 +266,7 @@ async def process_instances(instances, output_file, equivalence_alg):
                     instance["generations"],
                     equivalence_alg,
                 )
-                return {**instance, "partition": partition}
+                return {**instance, "partition": partition, "distinct": max(partition)}
 
         tasks = [process_single_instance(instance) for instance in instances]
 
@@ -264,7 +280,7 @@ async def main():
     parser.add_argument("--data", default="curated", choices=DATASETS)
     parser.add_argument(
         "--alg",
-        default="bertscore",
+        default="classifier",
         help="Equivalence testing method",
         choices=EQUIVALENCE_ALGS,
     )

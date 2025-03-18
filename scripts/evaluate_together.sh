@@ -1,10 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=sbb-together
-#SBATCH --partition=preempt
+#SBATCH --partition=general
+#SBATCH --exclude=babel-3-21,babel-4-33,shire-1-10,babel-3-25
 #SBATCH --requeue
 #SBATCH --output=slurm_output/together_%j.out
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=1GB
+#SBATCH --gres=gpu:A6000:2
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64GB
 #SBATCH --time=24:00:00
 #SBATCH --open-mode=append
 #SBATCH --mail-type=FAIL
@@ -20,7 +22,7 @@ for model in "$@"; do
 
     for data in curated wildchat
     do
-        bash scripts/eval.sh $model eval/$data/$model --mode together --data $data --concurrent-requests $concurrent
-        bash scripts/eval.sh $model eval-ic/$data/$model --mode together --in-context --data $data --concurrent-requests $concurrent
+        bash scripts/eval.sh $model $data eval/$data/$model --mode together --concurrent-requests $concurrent
+        bash scripts/eval.sh $model $data eval-ic/$data/$model --mode together --in-context --concurrent-requests $concurrent
     done
 done

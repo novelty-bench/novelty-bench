@@ -14,3 +14,5 @@ anthropic[vertex]
 scikit-learn
 accelerate>=0.26.0
 sacrebleu
+flash-attn --no-build-isolation
+

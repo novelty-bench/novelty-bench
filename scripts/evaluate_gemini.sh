@@ -1,10 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=sbb-gemini
-#SBATCH --partition=preempt
+#SBATCH --partition=general
+#SBATCH --exclude=babel-3-21,babel-4-33,shire-1-10,babel-3-25
 #SBATCH --requeue
 #SBATCH --output=slurm_output/gemini_%j.out
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=16GB
+#SBATCH --gres=gpu:A6000:2
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64GB
 #SBATCH --time=24:00:00
 #SBATCH --open-mode=append
 #SBATCH --mail-type=FAIL
@@ -15,7 +17,7 @@ for model in "$@"; do
     # Set concurrent requests based on model name
     for data in curated wildchat
     do
-        bash scripts/eval.sh $model eval/$data/gemini/$model --mode gemini --data $data --concurrent-requests $concurrent
-        bash scripts/eval.sh $model eval-ic/$data/gemini/$model --mode gemini --in-context --data $data --concurrent-requests $concurrent
+        bash scripts/eval.sh $model $data eval/$data/gemini/$model --mode gemini --concurrent-requests $concurrent
+        bash scripts/eval.sh $model $data eval-ic/$data/gemini/$model --mode gemini --in-context --concurrent-requests $concurrent
     done
 done

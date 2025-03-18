@@ -26,14 +26,14 @@ VAL_FILE = "data/classifier/val.jsonl"
 LABEL_COLUMN = "similar"
 WARMUP_STEPS = 10
 TRAIN_STEPS = 80
-PRETRAINED_MODEL = "microsoft/deberta-v3-large"
+PRETRAINED_MODEL = "microsoft/deberta-v3-base"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH_SIZE = 16
+BATCH_SIZE = 8
 VAL_BATCH_SIZE = 16
 MAX_LR = 2e-5
 MIN_LR = 2e-6
 MAX_LEN = 128
-GRAD_ACC_STEPS = 4
+GRAD_ACC_STEPS = 8
 AUTOCAST = (
     torch.autocast(
         DEVICE,
@@ -171,60 +171,13 @@ def get_train_iter(dl):
 
 
 def main():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    with open(os.path.join(OUTPUT_DIR, "hyperparams.json"), "w") as f:
-        json.dump(hyperparameters(), f)
-
-    tokenizer = AutoTokenizer.from_pretrained(PRETRAINED_MODEL)
-    train_data = pd.read_json(TRAIN_FILE, lines=True)
-    val_data = pd.read_json(VAL_FILE, lines=True)
-    train_dl = get_dataloader(tokenizer, train_data, True)
-    val_dl = get_dataloader(tokenizer, val_data, False)
-    train_iter = get_train_iter(train_dl)
-
     model = AutoModelForSequenceClassification.from_pretrained(
-        PRETRAINED_MODEL, num_labels=2
+        "yimingzhang/deberta-v3-large-generation-similarity",
+        torch_dtype=torch.bfloat16
     ).to(DEVICE)
-    
-    # Calculate class weights
-    class_counts = train_data[LABEL_COLUMN].value_counts().to_dict()
-    total_count = sum(class_counts.values())
-    weights = [total_count / class_counts[i] for i in range(len(class_counts))]
-    class_weights = torch.FloatTensor(weights).to(DEVICE)
-    
-    opt = torch.optim.AdamW(model.parameters(), lr=0.0, fused=DEVICE == "cuda")
-    train_losses = deque(maxlen=16)
-    train_accs = deque(maxlen=16)
-    
-    with tqdm(total=TRAIN_STEPS) as pbar:
-        for i in range(TRAIN_STEPS):
-            lr = get_lr(i)
-            for g in opt.param_groups:
-                g["lr"] = lr
-            for _ in range(GRAD_ACC_STEPS):
-                batch = next(train_iter)
-                with AUTOCAST:
-                    outputs = model(**batch)
-                    logits = outputs.logits
-                    loss_fct = torch.nn.CrossEntropyLoss(weight=class_weights)
-                    loss = loss_fct(logits, batch["labels"])
-                    preds = outputs["logits"].argmax(-1)
-                
-                train_accs.append((batch["labels"] == preds).to(torch.float32).mean().item())
-                train_losses.append(loss.item())
-                loss.backward()
-            opt.step()
-            opt.zero_grad()
-            pbar.update(1)
-            pbar.set_postfix(
-                {
-                    "Running train loss": f"{np.mean(train_losses).item()}",
-                    "Running train acc": f"{np.mean(train_accs).item()}"
-                }
-            )
-    torch.save(model.state_dict(), os.path.join(OUTPUT_DIR, "model.pt"))
-    model.load_state_dict(torch.load(os.path.join(OUTPUT_DIR, "model.pt")))
-
+    tokenizer = AutoTokenizer.from_pretrained(PRETRAINED_MODEL)
+    val_data = pd.read_json(VAL_FILE, lines=True)
+    val_dl = get_dataloader(tokenizer, val_data, False)
 
     model.eval()
     labels = val_data[LABEL_COLUMN].tolist()
@@ -234,8 +187,10 @@ def main():
             batch = to_device(batch)
             with AUTOCAST:
                 outputs = model(**batch)
-            preds_batch = outputs["logits"].argmax(-1)
-            preds.extend(preds_batch.flatten().tolist())
+            preds_batch = outputs["logits"].softmax(-1)[:, 1].tolist()
+            preds.extend([1 if p > 0.102 else 0 for p in preds_batch])
+        
+    print(len(labels), len(preds))
     assert len(labels) == len(preds)
 
 
@@ -248,12 +203,12 @@ def main():
     val_eval["accuracy"] = accuracy_score(labels, preds)
 
     print(json.dumps(val_eval, indent=2))
-    with open(os.path.join(OUTPUT_DIR, "eval.json"), "w") as f:
-        json.dump(val_eval, f)
+    # with open(os.path.join(OUTPUT_DIR, "eval.json"), "w") as f:
+    #     json.dump(val_eval, f)
 
-    val_data.to_json(
-        os.path.join(OUTPUT_DIR, "val.jsonl"), lines=True, orient="records"
-    )
+    # val_data.to_json(
+    #     os.path.join(OUTPUT_DIR, "val.jsonl"), lines=True, orient="records"
+    # )
 
 
 if __name__ == "__main__":

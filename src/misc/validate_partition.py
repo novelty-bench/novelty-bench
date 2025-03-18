@@ -15,7 +15,7 @@ for model_file in glob.glob("model-lists/*"):
 for eval_dir in ["eval", "eval-ic"]:
     for model in models:
         for eval_set in ["curated", "wildchat"]:
-            eval_file = f"{eval_dir}/{eval_set}/{model}/generations.jsonl"
+            eval_file = f"{eval_dir}/{eval_set}/{model}/partitions.jsonl"
             expected_lines = 100 if eval_set == "curated" else 1000
 
             if not os.path.exists(eval_file):
@@ -34,9 +34,8 @@ for eval_dir in ["eval", "eval-ic"]:
             for i, line in enumerate(lines, 1):
                 try:
                     data = json.loads(line)
-                    generations = data.get("generations", [])
-                    if len(generations) != 10 or any(not isinstance(g, str) for g in generations):
-                        print(json.dumps(data))
+                    partition = data["partition"]
+                    if len(partition) != 10:
                         error_count += 1
                 except json.JSONDecodeError:
                     print(f"Line {i} in {eval_file} is not valid JSON")
