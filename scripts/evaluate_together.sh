@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=sbb-together
-#SBATCH --partition=general
-#SBATCH --exclude=babel-3-21,babel-4-33,shire-1-10,babel-3-25
+#SBATCH --partition=preempt
+#SBATCH --exclude=babel-3-21,babel-4-33,shire-1-10,babel-3-25,babel-1-23,babel-0-19
 #SBATCH --requeue
 #SBATCH --output=slurm_output/together_%j.out
 #SBATCH --gres=gpu:A6000:2
@@ -23,6 +23,5 @@ for model in "$@"; do
     for data in curated wildchat
     do
         bash scripts/eval.sh $model $data eval/$data/$model --mode together --concurrent-requests $concurrent
-        bash scripts/eval.sh $model $data eval-ic/$data/$model --mode together --in-context --concurrent-requests $concurrent
     done
 done

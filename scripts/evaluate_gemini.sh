@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=sbb-gemini
-#SBATCH --partition=general
-#SBATCH --exclude=babel-3-21,babel-4-33,shire-1-10,babel-3-25
+#SBATCH --partition=preempt
+#SBATCH --exclude=babel-3-21,babel-4-33,shire-1-10,babel-3-25,babel-1-23,babel-0-19
 #SBATCH --requeue
 #SBATCH --output=slurm_output/gemini_%j.out
 #SBATCH --gres=gpu:A6000:2
@@ -18,6 +18,5 @@ for model in "$@"; do
     for data in curated wildchat
     do
         bash scripts/eval.sh $model $data eval/$data/gemini/$model --mode gemini --concurrent-requests $concurrent
-        bash scripts/eval.sh $model $data eval-ic/$data/gemini/$model --mode gemini --in-context --concurrent-requests $concurrent
     done
 done

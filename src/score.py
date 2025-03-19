@@ -5,6 +5,7 @@ import functools
 import json
 import os
 
+import datasets
 import numpy as np
 import torch
 from aiofiles import open as aio_open
@@ -17,113 +18,22 @@ from src.common import DATASETS
 
 CONCURRENT_REQUESTS = 1
 
-reward_percentiles = [
-    -25.0,
-    -15.0,
-    -13.0,
-    -12.0,
-    -11.25,
-    -10.625,
-    -10.125,
-    -9.625,
-    -9.25,
-    -8.875,
-    -8.5,
-    -8.1875,
-    -7.90625,
-    -7.65625,
-    -7.40625,
-    -7.15625,
-    -6.96875,
-    -6.78125,
-    -6.625,
-    -6.4375,
-    -6.3125,
-    -6.15625,
-    -6.03125,
-    -5.90625,
-    -5.78125,
-    -5.6875,
-    -5.5625,
-    -5.4375,
-    -5.34375,
-    -5.25,
-    -5.15625,
-    -5.0625,
-    -4.96875,
-    -4.90625,
-    -4.8125,
-    -4.71875,
-    -4.65625,
-    -4.5625,
-    -4.5,
-    -4.40625,
-    -4.3125,
-    -4.25,
-    -4.15625,
-    -4.09375,
-    -4.03125,
-    -3.953125,
-    -3.875,
-    -3.796875,
-    -3.734375,
-    -3.65625,
-    -3.578125,
-    -3.515625,
+reward_thresholds = [
+    -7.71875,
+    -6.28125,
+    -6.0,
+    -5.71875,
+    -5.5,
+    -5.0,
+    -4.375,
     -3.4375,
-    -3.359375,
-    -3.294999999999959,
-    -3.21875,
-    -3.140625,
-    -3.0625,
-    -3.0,
-    -2.921875,
-    -2.84375,
-    -2.765625,
-    -2.6875,
-    -2.609375,
-    -2.515625,
-    -2.453125,
-    -2.359375,
-    -2.28125,
-    -2.203125,
-    -2.109375,
-    -2.03125,
-    -1.9375,
-    -1.8515625,
-    -1.75,
-    -1.65625,
-    -1.56640625,
-    -1.46875,
-    -1.3671875,
-    -1.2578125,
-    -1.1484375,
-    -1.03125,
-    -0.91015625,
-    -0.77734375,
-    -0.640625,
-    -0.4921875,
-    -0.341796875,
-    -0.181640625,
-    -0.0028903198242182936,
-    0.1904296875,
-    0.3984375,
-    0.6374999999999886,
-    0.91015625,
-    1.2265625,
-    1.6015625,
-    2.0,
-    2.5,
-    3.15625,
-    4.03125,
-    5.34375,
-    7.625,
-    float("inf"),
+    -2.046875,
 ]
 
 
 def transform_raw_reward(reward: float) -> int:
-    return bisect.bisect_left(reward_percentiles, reward)
+    # score of 1 to 10
+    return bisect.bisect_left(reward_thresholds, reward) + 1
 
 
 @functools.cache
@@ -191,14 +101,14 @@ async def score_partition_rm(
 async def process_instances(instances, output_file, patience):
     """Processes all instances concurrently and writes results to a file."""
     # Check if file exists and has matching keys
-    # if os.path.exists(output_file):
-    #     try:
-    #         existing_output = load_dataset("json", data_files=output_file, split="train")
-    #         if not set(instances["id"]) - set(existing_output["id"]):
-    #             print("All prompts are scored. Skipping.")
-    #             return
-    #     except datasets.exceptions.DatasetGenerationError:
-    #         pass
+    if os.path.exists(output_file):
+        try:
+            existing_output = load_dataset("json", data_files=output_file, split="train")
+            if not set(instances["id"]) - set(existing_output["id"]):
+                print("All prompts are scored. Skipping.")
+                return
+        except datasets.exceptions.DatasetGenerationError:
+            pass
 
     async with aio_open(output_file, "w", buffering=1) as f:
         semaphore = asyncio.Semaphore(CONCURRENT_REQUESTS)

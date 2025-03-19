@@ -111,10 +111,19 @@ class AnthropicService(InferenceService):
     ) -> list[str]:
         responses = []
         for _ in range(n):
-            resp = await self.client.messages.create(
-                model=model, messages=messages, **kwargs
-            )
-            responses.append(resp.content[0].text)
+            if messages[0]["role"] == "system":
+                resp = await self.client.messages.create(
+                    system=messages[0]["content"],
+                    model=model,
+                    messages=messages[1:],
+                    **kwargs,
+                )
+                responses.append(resp.content[0].text)
+            else:
+                resp = await self.client.messages.create(
+                    model=model, messages=messages, **kwargs
+                )
+                responses.append(resp.content[0].text)
         return responses
 
 
@@ -153,15 +162,26 @@ async def run_generation(
     service: InferenceService,
     model: str,
     prompt: str,
+    prompt_paraphrases: list[str] | None,
     num_generations: int,
-    in_context: bool,
+    sampling: str,
     max_retries: int = 10,
 ) -> list[str]:
     responses = []
     messages = [{"role": "user", "content": prompt}]
     for attempt in range(max_retries):
         try:
-            if in_context:
+            if sampling == "default":
+                # parallel generation w/o context
+                responses = await service.generate(
+                    model=model,
+                    messages=messages,
+                    max_tokens=512,
+                    temperature=1.0,
+                    n=num_generations,
+                )
+
+            elif sampling == "in-context":
                 while len(responses) < num_generations:
                     response = await service.generate(
                         model=model,
@@ -178,8 +198,30 @@ async def run_generation(
                             "content": "Can you generate a different answer?",
                         }
                     )
-            else:
-                # parallel generation w/o context
+
+            elif sampling == "paraphrase":
+                assert prompt_paraphrases and len(prompt_paraphrases) == num_generations
+                while len(responses) < num_generations:
+                    messages = [
+                        {"role": "user", "content": prompt_paraphrases[len(responses)]}
+                    ]
+                    response = await service.generate(
+                        model=model,
+                        messages=messages,
+                        max_tokens=512,
+                        temperature=1.0,
+                    )
+                    new_response = response[0]
+                    responses.append(new_response)
+
+            elif sampling == "system-prompt":
+                messages = [
+                    {
+                        "role": "system",
+                        "content": "You are a producer of unique answers, and you strive to tell each user a novel answer to their question.",
+                    },
+                    {"role": "user", "content": prompt},
+                ]
                 responses = await service.generate(
                     model=model,
                     messages=messages,
@@ -187,6 +229,8 @@ async def run_generation(
                     temperature=1.0,
                     n=num_generations,
                 )
+            else:
+                raise Exception("Unknown mode " + sampling)
 
             return responses
 
@@ -214,7 +258,7 @@ async def process_prompts(
     output_file,
     num_generations,
     concurrent_requests,
-    in_context,
+    sampling,
 ):
     """Processes all prompts concurrently and writes results to a file."""
     async with aio_open(output_file, "a", buffering=1) as f:
@@ -223,7 +267,12 @@ async def process_prompts(
         async def process_single_prompt(prompt):
             async with semaphore:
                 generations = await run_generation(
-                    service, model, prompt["prompt"], num_generations, in_context
+                    service,
+                    model,
+                    prompt["prompt"],
+                    prompt.get("prompt_paraphrases"),
+                    num_generations,
+                    sampling,
                 )
                 return {
                     "id": prompt["id"],
@@ -254,7 +303,9 @@ async def main():
         "--data", default="curated", choices=DATASETS, help="Source of prompts"
     )
     parser.add_argument(
-        "--in-context", action="store_true", help="Generate responses in context"
+        "--sampling",
+        choices=["regenerate", "in-context", "paraphrase", "system-prompt"],
+        default="regenerate",
     )
     parser.add_argument(
         "--num-generations",
@@ -325,7 +376,7 @@ async def main():
             output_file,
             args.num_generations,
             concurrent_requests,
-            args.in_context,
+            args.sampling,
         )
 
     finally:

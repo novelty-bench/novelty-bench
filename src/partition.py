@@ -4,6 +4,7 @@ import functools
 import json
 import os
 
+import datasets
 import numpy as np
 import sacrebleu
 import torch
@@ -196,11 +197,25 @@ async def equivalence_check_bertscore(
     return scores["f1"][0] > 0.719
 
 
+def maybe_test_equality(response_0: str, response_1: str) -> bool | None:
+    unigram_0 = response_0.strip().lower().split()
+    unigram_1 = response_1.strip().lower().split()
+    max_len = max(len(unigram_0), len(unigram_1))
+    if max_len <= 5:
+        common_unigrams = set(unigram_0) & set(unigram_1)
+        return len(common_unigrams) * 2 >= max_len
+
+    return None
+
+
 async def equivalence_check_classifier(
     prompt: str,
     response_0: str,
     response_1: str,
 ) -> bool:
+    equality = maybe_test_equality(response_0, response_1)
+    if equality is not None:
+        return equality
     score = await classifier_score(prompt, response_0, response_1)
     return score > 0.102
 
@@ -247,14 +262,14 @@ EQUIVALENCE_ALGS = {
 async def process_instances(instances, output_file, equivalence_alg):
     """Processes all instances concurrently and writes results to a file."""
     # Check if file exists and has matching keys
-    # if os.path.exists(output_file):
-    #     try:
-    #         existing_output = load_dataset("json", data_files=output_file, split="train")
-    #         if not set(instances["id"]) - set(existing_output["id"]):
-    #             print("All prompts have been partitioned. Skipping.")
-    #             return
-    #     except datasets.exceptions.DatasetGenerationError:
-    #         ...
+    if os.path.exists(output_file):
+        try:
+            existing_output = load_dataset("json", data_files=output_file, split="train")
+            if not set(instances["id"]) - set(existing_output["id"]):
+                print("All prompts have been partitioned. Skipping.")
+                return
+        except datasets.exceptions.DatasetGenerationError:
+            ...
 
     async with aio_open(output_file, "w", buffering=1) as f:
         semaphore = asyncio.Semaphore(CONCURRENT_REQUESTS)

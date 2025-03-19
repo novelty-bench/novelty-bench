@@ -7,4 +7,6 @@ do
     dir=$(dirname $f)
     fname=$(basename $f .json)
     vl-convert vl2jpeg -i $f -o $dir/$fname.jpg --scale 10.0 &
+    vl-convert vl2pdf -i $f -o $dir/$fname.pdf &
 done
+wait
