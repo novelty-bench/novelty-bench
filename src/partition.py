@@ -83,68 +83,6 @@ async def classifier_score(prompt: str, s1: str, s2: str):
     return score.cpu().item()
 
 
-async def gpt4o_mini_score(prompt: str, s1: str, s2: str):
-    SYS_PROMPT = 'Below, you will see two responses to the a prompt. Determine if the two responses are meaningfully different, so that a user who has seen one of the responses would likely benefit from seeing the other. Output "Similar" or "Different" only.'
-
-    completion = await client.chat.completions.create(
-        model="ft:gpt-4o-mini-2024-07-18:lti-carnegie-mellon-university::B7serxIF",
-        messages=[
-            {"role": "system", "content": SYS_PROMPT},
-            {
-                "role": "user",
-                "content": f"====== Prompt ======\n{prompt}\n\n====== Response 1 ======\n{s1}\n\n====== Response 2 ======\n{s2}",
-            },
-        ],
-        temperature=0.0,
-        logprobs=True,
-        top_logprobs=10,
-        max_tokens=1,
-    )
-
-    logit_similar = logit_different = -99
-    for logprob in completion.choices[0].logprobs.content[0].top_logprobs:
-        if logprob.token == "Similar":
-            logit_similar = logprob.logprob
-        if logprob.token == "Different":
-            logit_different = logprob.logprob
-
-    probs = np.exp([logit_similar, logit_different])
-    probs = probs / probs.sum()
-    p_similar = probs[0]
-    return p_similar
-
-
-async def gpt35_turbo_score(prompt: str, s1: str, s2: str):
-    SYS_PROMPT = 'Below, you will see two responses to the a prompt. Determine if the two responses are meaningfully different, so that a user who has seen one of the responses would likely benefit from seeing the other. Output "Similar" or "Different" only.'
-
-    completion = await client.chat.completions.create(
-        model="ft:gpt-3.5-turbo-0125:lti-carnegie-mellon-university::B7sns97b",
-        messages=[
-            {"role": "system", "content": SYS_PROMPT},
-            {
-                "role": "user",
-                "content": f"====== Prompt ======\n{prompt}\n\n====== Response 1 ======\n{s1}\n\n====== Response 2 ======\n{s2}",
-            },
-        ],
-        temperature=0.0,
-        logprobs=True,
-        top_logprobs=10,
-        max_tokens=1,
-    )
-
-    logit_similar = logit_different = -99
-    for logprob in completion.choices[0].logprobs.content[0].top_logprobs:
-        if logprob.token == "Similar":
-            logit_similar = logprob.logprob
-        if logprob.token == "Different":
-            logit_different = logprob.logprob
-
-    probs = np.exp([logit_similar, logit_different])
-    probs = probs / probs.sum()
-    p_similar = probs[0]
-    return p_similar
-
-
 async def equivalence_check_gpt4(prompt: str, response_0: str, response_1: str) -> bool:
     class Equivalence(BaseModel):
         equivalent: bool
