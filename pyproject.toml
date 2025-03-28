@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "second-best-bench"
+name = "novelty-bench"
 version = "0.1.0"
 description = "A benchmarking tool for evaluating language models"
 readme = "README.md"
