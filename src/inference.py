@@ -104,7 +104,7 @@ class GeminiService(InferenceService):
 
 class AnthropicService(InferenceService):
     def __init__(self):
-        self.client = AsyncAnthropicVertex(region="us-east5", project_id="802374347260")
+        self.client = AsyncAnthropicVertex(region="us-east5", project_id="GOOGLE-CLOUD-PROJECT-ID")
 
     async def generate(
         self, model: str, messages: list[dict[str, str]], n=1, **kwargs
@@ -133,7 +133,7 @@ class VertexService(InferenceService):
 
     def refresh_client(self):
         model_location = "us-central1"
-        project_id = "802374347260"
+        project_id = "GOOGLE-CLOUD-PROJECT-ID"
         credentials, _ = default()
         auth_request = transport.requests.Request()
         credentials.refresh(auth_request)
