@@ -158,6 +158,14 @@ class VertexService(InferenceService):
         return responses
 
 
+class DeepSeekService(OpenAIService):
+    def __init__(self):
+        with open("/home/yimingz3/secrets/openrouter-api-key") as file:
+            self.client = AsyncOpenAI(
+                base_url="https://openrouter.ai/api/v1", api_key=file.read().strip()
+            )
+
+
 async def run_generation(
     service: InferenceService,
     model: str,
@@ -171,7 +179,7 @@ async def run_generation(
     messages = [{"role": "user", "content": prompt}]
     for attempt in range(max_retries):
         try:
-            if sampling == "default":
+            if sampling == "regenerate":
                 # parallel generation w/o context
                 responses = await service.generate(
                     model=model,
@@ -291,7 +299,16 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
-        choices=["vllm", "openai", "together", "cohere", "gemini", "anthropic", "vertex"],
+        choices=[
+            "vllm",
+            "openai",
+            "together",
+            "cohere",
+            "gemini",
+            "anthropic",
+            "vertex",
+            "deepseek",
+        ],
         required=True,
         help="Inference service provider (vllm for local server, openai for API, etc.)",
     )
@@ -366,6 +383,8 @@ async def main():
         service = AnthropicService()
     elif args.mode == "vertex":
         service = VertexService()
+    elif args.mode == "deepseek":
+        service = DeepSeekService()
     else:
         raise Exception(f"unknown service {service}")
     try:

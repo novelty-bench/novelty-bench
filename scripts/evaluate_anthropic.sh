@@ -18,8 +18,11 @@ for model in "$@"; do
     do
         bash scripts/eval.sh $model $data eval/$data/anthropic/$model --mode anthropic --concurrent-requests $concurrent
     done
+done
 
+
+if [[ "$model" == "claude-3-5-sonnet-v2@20241022" ]]; then
     bash scripts/eval.sh $model curated eval-ic/curated/anthropic/$model --mode anthropic --sampling in-context --concurrent-requests $concurrent
     bash scripts/eval.sh $model curated eval-paraphrase/curated/anthropic/$model --mode anthropic --sampling paraphrase --concurrent-requests $concurrent
     bash scripts/eval.sh $model curated eval-system-prompt/curated/anthropic/$model --mode anthropic --sampling system-prompt --concurrent-requests $concurrent
-done
+fi

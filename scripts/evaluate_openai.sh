@@ -18,7 +18,10 @@ for model in "$@"; do
     do
         bash scripts/eval.sh $model $data eval/$data/openai/$model --mode openai --concurrent-requests $concurrent
     done
+done
+
+if [[ "$model" == "gpt-4o-2024-11-20" ]]; then
     bash scripts/eval.sh $model curated eval-ic/curated/openai/$model --mode openai --sampling in-context --concurrent-requests $concurrent
     bash scripts/eval.sh $model curated eval-paraphrase/curated/openai/$model --mode openai --sampling paraphrase --concurrent-requests $concurrent
     bash scripts/eval.sh $model curated eval-system-prompt/curated/openai/$model --mode openai --sampling system-prompt --concurrent-requests $concurrent
-done
+fi

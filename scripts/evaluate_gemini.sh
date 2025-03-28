@@ -20,3 +20,9 @@ for model in "$@"; do
         bash scripts/eval.sh $model $data eval/$data/gemini/$model --mode gemini --concurrent-requests $concurrent
     done
 done
+
+if [[ "$model" == "gemini-2.0-pro-exp-02-05" ]]; then
+    bash scripts/eval.sh $model curated eval-ic/curated/gemini/$model --mode gemini --sampling in-context --concurrent-requests $concurrent
+    bash scripts/eval.sh $model curated eval-paraphrase/curated/gemini/$model --mode gemini --sampling paraphrase --concurrent-requests $concurrent
+    bash scripts/eval.sh $model curated eval-system-prompt/curated/gemini/$model --mode gemini --sampling system-prompt --concurrent-requests $concurrent
+fi
