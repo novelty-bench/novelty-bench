@@ -203,13 +203,6 @@ def main():
     val_eval["accuracy"] = accuracy_score(labels, preds)
 
     print(json.dumps(val_eval, indent=2))
-    # with open(os.path.join(OUTPUT_DIR, "eval.json"), "w") as f:
-    #     json.dump(val_eval, f)
-
-    # val_data.to_json(
-    #     os.path.join(OUTPUT_DIR, "val.jsonl"), lines=True, orient="records"
-    # )
-
 
 if __name__ == "__main__":
     main()
