@@ -172,7 +172,7 @@ def get_train_iter(dl):
 
 def main():
     model = AutoModelForSequenceClassification.from_pretrained(
-        "yimingzhang/deberta-v3-large-generation-similarity",
+        "deberta-v3-large-generation-similarity",
         torch_dtype=torch.bfloat16
     ).to(DEVICE)
     tokenizer = AutoTokenizer.from_pretrained(PRETRAINED_MODEL)

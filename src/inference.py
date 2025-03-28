@@ -43,7 +43,7 @@ class OpenAIService(InferenceService):
 
 class TogetherService(OpenAIService):
     def __init__(self):
-        with open("/home/yimingz3/secrets/together-api-key") as file:
+        with open("together-api-key") as file:
             self.client = AsyncOpenAI(
                 api_key=file.read().strip(), base_url="https://api.together.xyz/v1"
             )
@@ -57,7 +57,7 @@ class VLLMService(OpenAIService):
 
 class CohereService(InferenceService):
     def __init__(self):
-        with open("/home/yimingz3/secrets/cohere-api-key") as file:
+        with open("cohere-api-key") as file:
             self.client = cohere.AsyncClientV2(file.read().strip())
 
     async def generate(
@@ -72,7 +72,7 @@ class CohereService(InferenceService):
 
 class GeminiService(InferenceService):
     def __init__(self):
-        with open("/home/yimingz3/secrets/gemini-api-key") as file:
+        with open("gemini-api-key") as file:
             self.client = genai.Client(api_key=file.read().strip())
 
     async def generate(
@@ -160,7 +160,7 @@ class VertexService(InferenceService):
 
 class DeepSeekService(OpenAIService):
     def __init__(self):
-        with open("/home/yimingz3/secrets/openrouter-api-key") as file:
+        with open("openrouter-api-key") as file:
             self.client = AsyncOpenAI(
                 base_url="https://openrouter.ai/api/v1", api_key=file.read().strip()
             )

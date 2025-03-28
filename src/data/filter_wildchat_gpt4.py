@@ -10,7 +10,7 @@ from tqdm.auto import tqdm
 
 
 def oai_client():
-    with open("/home/yimingz3/secrets/openai-api-key") as file:
+    with open("openai-api-key") as file:
         return AsyncOpenAI(api_key=file.read().strip())
 
 

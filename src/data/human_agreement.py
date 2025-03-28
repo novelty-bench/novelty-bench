@@ -8,7 +8,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 from tqdm.auto import tqdm
 
-with open("/home/yimingz3/secrets/openai-api-key") as file:
+with open("openai-api-key") as file:
     client = AsyncOpenAI(api_key=file.read().strip())
 
 SYS_PROMPT = """You are helping select prompts for a benchmark that measures language models' ability to generate diverse, high-quality alternative answers. For a prompt to qualify, it should:
