@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "novelty-bench"
+version = "0.1.0"
+description = "A benchmarking tool for evaluating language models"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+dependencies = [
+    "openai",
+    "datasets",
+    "ruff",
+    "aiofiles",
+    "altair",
+    "tiktoken",
+    "rouge-score",
+    "protobuf",
+    "bert_score",
+    "evaluate",
+    "cohere",
+    "google-genai",
+    "anthropic[vertex]",
+]
+
+[tool.ruff]
+# Line length and target version
+line-length = 90
+target-version = "py311"
+
+[tool.ruff.lint]
+# Selected rules by category
+select = ["E", "F", "UP", "B", "SIM", "I"]
+ignore = ["E501"]  # Ignore line length errors
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
