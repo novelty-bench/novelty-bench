@@ -1,5 +1,7 @@
 # NoveltyBench
 
+See [project webpage](https://novelty-bench.github.io/) for the dataset, evaluation results and instructions for submitting new models.
+
 ## Installation
 
 ```shell
