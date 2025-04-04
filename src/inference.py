@@ -15,7 +15,7 @@ from google.genai import types
 from openai import AsyncOpenAI
 from tqdm.auto import tqdm
 
-from src.common import DATASETS, oai_client
+from src.common import oai_client
 
 
 class InferenceService(ABC):
@@ -317,7 +317,10 @@ async def main():
         "--eval-dir", help="Directory to save evaluation results", required=True
     )
     parser.add_argument(
-        "--data", default="curated", choices=DATASETS, help="Source of prompts"
+        "--data",
+        default="curated",
+        choices=["curated", "wildchat"],
+        help="Source of prompts",
     )
     parser.add_argument(
         "--sampling",
@@ -338,7 +341,7 @@ async def main():
     )
     args = parser.parse_args()
 
-    dataset = load_dataset("json", data_files=DATASETS[args.data], split="train")
+    dataset = load_dataset("yimingzhang/novelty-bench", split=args.data)
     eval_dir = (
         args.eval_dir if args.eval_dir else os.path.join(f"{args.data}-evals", args.model)
     )

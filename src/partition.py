@@ -16,7 +16,7 @@ from rouge_score import rouge_scorer
 from tqdm.auto import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from src.common import DATASETS, oai_client
+from src.common import oai_client
 
 CONCURRENT_REQUESTS = 1
 
@@ -229,7 +229,6 @@ async def process_instances(instances, output_file, equivalence_alg):
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", default="curated", choices=DATASETS)
     parser.add_argument(
         "--alg",
         default="classifier",

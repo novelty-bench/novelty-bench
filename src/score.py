@@ -14,8 +14,6 @@ from pydantic import BaseModel
 from tqdm.asyncio import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from src.common import DATASETS
-
 CONCURRENT_REQUESTS = 1
 
 reward_thresholds = [
@@ -139,7 +137,6 @@ async def process_instances(instances, output_file, patience):
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", default="curated", choices=DATASETS)
     parser.add_argument(
         "--eval-dir", help="Directory containing evaluation files", required=True
     )
