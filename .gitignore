@@ -176,7 +176,6 @@ data/*
 !data/readme.txt
 !data/curated.jsonl
 !data/wildchat-1k.jsonl
-eval*/
 slurm_output/
 *.tar.gz
 .vscode/
