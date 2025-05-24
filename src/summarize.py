@@ -6,10 +6,10 @@ import numpy as np
 import pandas as pd
 
 
-def summarize(df: pd.DataFrame, decay_rate=0.5) -> dict:
+def summarize(df: pd.DataFrame) -> dict:
     summary = {}
 
-    summary["mean_distinct"] = np.mean(df["distinct"])
+    summary["mean_distinct"] = np.mean(df["partition_scores"].map(len))
     summary["mean_utility"] = np.mean(df["utility"])
 
     return summary
