@@ -43,6 +43,25 @@ uv sync
    python src/summarize.py --eval-dir results/curated/gpt4o
    ```
 
+### Note on classifier input length
+
+**Caution:** the `classifier` equivalence algorithm truncates **each response to
+its first 128 tokens** before scoring (`max_length=128` in `src/partition.py`).
+The same truncation was applied when the classifier was fine-tuned (`MAX_LEN` in
+`src/classifier/finetune_classifier.py`), so this is the model's effective
+comparison window rather than an inference-time mismatch — but it does mean that
+any content past that window has no effect on the partition. Two responses that
+share an opening and diverge only later will be scored as if they were identical.
+
+This is worth checking before applying the classifier to long-form generations.
+For reference, the released classifier training data (`data/train.jsonl`) has a
+median response length of roughly 308 whitespace-delimited words, already well
+beyond the 128-token window the model actually sees, so the window is a ceiling
+on the comparison rather than a limit that long inputs merely approach. If your
+responses carry their distinguishing content late — later turns, rebuttals,
+conclusions — the partition may under-count distinct responses, and results are
+best interpreted as a judgement about the opening of each response.
+
 ### Full Worked Example
 
 For example, to run gemma-3-1b-it from start to finish:
