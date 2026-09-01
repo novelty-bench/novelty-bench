@@ -182,6 +182,21 @@ The NoveltyBench team will:
 - Review and merge your submission;
 - Update the leaderboard with your results.
 
+### Leaderboard submissions
+
+The leaderboard is scoped to training and inference-time algorithms applied to
+openly specified models, so that each entry can be reproduced and the method
+behind it reused. Closed commercial products, and self-reported results that we
+cannot reproduce, are out of scope; pull requests submitting them may be closed
+without review. A submission should carry enough for us to re-run the method:
+the `scores.jsonl` and `summary.json` files required above for both _NB-Curated_
+and _NB-WildChat_, together with the attribution fields already used by existing
+entries (`paper` and `model`) pointing at a public description of the method and
+at the model it was applied to. Anyone is welcome to run this open harness on
+any system they choose and publish their own results, citing NoveltyBench for
+the dataset and metrics. If you are unsure whether a method falls in scope, open
+an issue before opening a pull request.
+
 
 ## Contact
 
