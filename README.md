@@ -184,15 +184,13 @@ The NoveltyBench team will:
 
 ### Submission policy
 
-The leaderboard tracks training and inference-time methods applied to openly
-specified models, so that others can reproduce the numbers and reuse the
-method. Submissions need the `scores.jsonl` and `summary.json` files for both
-subsets, plus `paper` and `model` links to a public description of the method
-and the model it was applied to. Closed systems and results we can't reproduce
-are out of scope and may be closed without review. Anyone can run the harness
-on any system and publish the results, citing NoveltyBench. Not sure if your
-method is in scope? Open an issue first. This policy applies to submissions
-received after 2026-09-06.
+The leaderboard is for training and inference-time methods applied to publicly
+available models (open weights, or a public API with a named model version),
+so that others can reproduce the results. Submissions must include enough
+information for us to reproduce your results. Closed systems and results we
+can't reproduce are out of scope and may be closed without review. Anyone can
+run NoveltyBench on any system and publish the results, citing the benchmark.
+Not sure if your method is in scope? Open an issue first.
 
 
 ## Contact
