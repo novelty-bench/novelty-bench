@@ -184,26 +184,15 @@ The NoveltyBench team will:
 
 ### Submission policy
 
-The NoveltyBench leaderboard is meant to track *methods* — training recipes and
-inference-time algorithms — applied to models whose identity and configuration
-are openly specified, so that a third party can take the same base model, apply
-the same method, and arrive at the same numbers, and so that the method itself
-is something other researchers can pick up and build on. That is why we ask
-every submission to include enough to re-run it end to end: the `scores.jsonl`
-and `summary.json` files for both _NB-Curated_ and _NB-WildChat_, plus the
-attribution fields existing entries already use (`paper` and `model`), which
-should point at a public write-up of the method and at the model it was applied
-to. Closed systems, and results we have no way of reproducing ourselves, don't
-fit this purpose however carefully they were run — we simply aren't in a
-position to verify them, so we won't list them, and pull requests submitting
-them may be closed without a full review. None of this stops anyone from using
-the benchmark: the harness, data, and scoring pipeline are all open, and we
-encourage anyone to run them on whatever system they like and publish the
-results wherever they choose, citing NoveltyBench for the dataset and metrics.
-If you're not sure whether your method is in scope, open an issue and ask
-before putting a submission together — we're glad to talk it through. This
-policy applies to submissions received after its posting date (2026-09-06);
-entries accepted before then stay on the leaderboard as they are.
+The leaderboard tracks training and inference-time methods applied to openly
+specified models, so that others can reproduce the numbers and reuse the
+method. Submissions need the `scores.jsonl` and `summary.json` files for both
+subsets, plus `paper` and `model` links to a public description of the method
+and the model it was applied to. Closed systems and results we can't reproduce
+are out of scope and may be closed without review. Anyone can run the harness
+on any system and publish the results, citing NoveltyBench. Not sure if your
+method is in scope? Open an issue first. This policy applies to submissions
+received after 2026-09-06.
 
 
 ## Contact
