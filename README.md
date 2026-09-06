@@ -185,12 +185,11 @@ The NoveltyBench team will:
 ### Submission policy
 
 The leaderboard is for training and inference-time methods applied to publicly
-available models (open weights, or a public API with a named model version),
-so that others can reproduce the results. Submissions must include enough
-information for us to reproduce your results. Closed systems and results we
-can't reproduce are out of scope and may be closed without review. Anyone can
-run NoveltyBench on any system and publish the results, citing the benchmark.
-Not sure if your method is in scope? Open an issue first.
+available models (open weights, or a public API with a named model version).
+Closed systems and results we can't reproduce are out of scope and will be
+closed without review. Anyone can run NoveltyBench on any system and publish
+the results, citing the benchmark. Not sure if your method is in scope? Open an
+issue first.
 
 
 ## Contact
