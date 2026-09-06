@@ -182,20 +182,28 @@ The NoveltyBench team will:
 - Review and merge your submission;
 - Update the leaderboard with your results.
 
-### Leaderboard submissions
+### Submission policy
 
-The leaderboard is scoped to training and inference-time algorithms applied to
-openly specified models, so that each entry can be reproduced and the method
-behind it reused. Closed commercial products, and self-reported results that we
-cannot reproduce, are out of scope; pull requests submitting them may be closed
-without review. A submission should carry enough for us to re-run the method:
-the `scores.jsonl` and `summary.json` files required above for both _NB-Curated_
-and _NB-WildChat_, together with the attribution fields already used by existing
-entries (`paper` and `model`) pointing at a public description of the method and
-at the model it was applied to. Anyone is welcome to run this open harness on
-any system they choose and publish their own results, citing NoveltyBench for
-the dataset and metrics. If you are unsure whether a method falls in scope, open
-an issue before opening a pull request.
+The NoveltyBench leaderboard is meant to track *methods* — training recipes and
+inference-time algorithms — applied to models whose identity and configuration
+are openly specified, so that a third party can take the same base model, apply
+the same method, and arrive at the same numbers, and so that the method itself
+is something other researchers can pick up and build on. That is why we ask
+every submission to include enough to re-run it end to end: the `scores.jsonl`
+and `summary.json` files for both _NB-Curated_ and _NB-WildChat_, plus the
+attribution fields existing entries already use (`paper` and `model`), which
+should point at a public write-up of the method and at the model it was applied
+to. Closed systems, and results we have no way of reproducing ourselves, don't
+fit this purpose however carefully they were run — we simply aren't in a
+position to verify them, so we won't list them, and pull requests submitting
+them may be closed without a full review. None of this stops anyone from using
+the benchmark: the harness, data, and scoring pipeline are all open, and we
+encourage anyone to run them on whatever system they like and publish the
+results wherever they choose, citing NoveltyBench for the dataset and metrics.
+If you're not sure whether your method is in scope, open an issue and ask
+before putting a submission together — we're glad to talk it through. This
+policy applies to submissions received after its posting date (2026-09-06);
+entries accepted before then stay on the leaderboard as they are.
 
 
 ## Contact
