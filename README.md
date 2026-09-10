@@ -52,11 +52,19 @@ Steps 2-4 take `--version` (default `1.1`) and read/write
 | version | partition | utility |
 |---|---|---|
 | 1.0 | `classifier`: pairwise DeBERTa similarity classifier, each response compared to the head of each existing class (128-token window, see below) | Skywork-Reward-Gemma-2-27B reward model |
-| 1.1 | `llm`: one `gpt-5.6-luna` call per prompt sees all responses in full and returns the groups (`JUDGE_SYSTEM` in `src/partition.py`; `--judge-model` to change) | same as 1.0 (revision pending) |
+| 1.1 | `llm`: one `claude-opus-5` call per prompt sees all responses in full and returns the groups (`JUDGE_SYSTEM` in `src/partition.py`) | `llm`: `claude-opus-5` scores each response on its own, 1-10, by how well it serves what the prompt asked for (`SCORE_SYSTEM` in `src/score.py`); the first response of each class is credited |
 
-`--alg` overrides the version's default partition algorithm; `--seed` shuffles
-the order responses are shown to the judge, for stability checks. The `llm`
-algorithm needs `OPENAI_API_KEY` (or `ANTHROPIC_API_KEY` for Claude judges).
+`--alg` / `--scorer` override a version's defaults and `--judge-model` the judge
+(`claude-*` needs `ANTHROPIC_API_KEY`, `gpt-*` needs `OPENAI_API_KEY`); `--seed`
+shuffles the order responses are shown to the partition judge, for stability
+checks. Every generation gets a score, so partitions and scores can be revised
+independently; results are cached by content and config, and an interrupted run
+resumes from `<file>.partial`.
+
+For large runs, `src/batch.py` sends a stage through the Anthropic Batches API
+at half price: `python src/batch.py submit --stage partition --eval-dir ...`,
+then `status`, then `collect`, which writes the same files as a live run and
+re-judges any invalid batch output live. Score after partitions are collected.
 
 ### Note on classifier input length
 

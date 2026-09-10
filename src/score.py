@@ -14,14 +14,9 @@ import os
 import numpy as np
 from pydantic import BaseModel
 
-from src.common import (
-    DEFAULT_JUDGE,
-    DEFAULT_VERSION,
-    METRIC_VERSIONS,
-    judge,
-    version_dir,
-)
+from src.common import DEFAULT_JUDGE, DEFAULT_VERSION, METRIC_VERSIONS, version_dir
 from src.evaluation_io import run_cached
+from src.judge import Call, Stage, judge
 
 reward_thresholds = [
     -7.71875,
@@ -100,21 +95,31 @@ class Score(BaseModel):
     score: int
 
 
-async def score_one(model: str, prompt: str, response: str) -> int:
-    user = f"<prompt>\n{prompt}\n</prompt>\n\n<response>\n{response}\n</response>"
-    for attempt in range(3):
-        out = await judge(model, SCORE_SYSTEM, user, Score)
-        if 1 <= out.score <= 10:
-            return out.score
-        print(f"invalid score (attempt {attempt}): {out.score}")
-    raise ValueError(f"judge never produced a valid score for {prompt!r}")
+def score_calls(instance: dict, config: dict) -> list[Call]:
+    """One call per generation: each is judged without seeing its siblings."""
+    return [
+        Call(
+            SCORE_SYSTEM,
+            f"<prompt>\n{instance['prompt']}\n</prompt>\n\n<response>\n{g}\n</response>",
+            Score,
+        )
+        for g in instance["generations"]
+    ]
+
+
+def score_fold(instance: dict, outputs: list, config: dict) -> dict:
+    scores = [o.score for o in outputs]
+    if not all(1 <= s <= 10 for s in scores):
+        raise ValueError(f"scores out of range: {scores}")
+    return utility_fields(scores, instance["partition"], config["patience"])
+
+
+STAGE = Stage("score", "score_key", score_calls, score_fold)
 
 
 async def score_llm(instance, model) -> list[int]:
-    """Each generation is judged on its own, without seeing its siblings."""
-    return await asyncio.gather(
-        *(score_one(model, instance["prompt"], g) for g in instance["generations"])
-    )
+    outputs = await asyncio.gather(*(judge(model, c) for c in score_calls(instance, {})))
+    return [o.score for o in outputs]
 
 
 SCORERS = {
@@ -136,6 +141,16 @@ def score_first_occurrences(scores, partition):
     return generation_scores, partition_scores
 
 
+def utility_fields(scores, partition, patience):
+    credited, partition_scores = score_first_occurrences(scores, partition)
+    return {
+        "generation_scores": scores,
+        "partition_scores": partition_scores,
+        "utility": np.average(credited, weights=patience ** np.arange(len(credited))),
+        "distinct": len(partition_scores),
+    }
+
+
 async def process_instances(
     instances, output_file, scorer, config, patience, concurrency=1
 ):
@@ -143,16 +158,7 @@ async def process_instances(
         raise ValueError("Patience must be between 0 and 1")
 
     async def compute(instance):
-        scores = await scorer(instance)
-        credited, partition_scores = score_first_occurrences(
-            scores, instance["partition"]
-        )
-        return {
-            "generation_scores": scores,
-            "partition_scores": partition_scores,
-            "utility": np.average(credited, weights=patience ** np.arange(len(credited))),
-            "distinct": len(partition_scores),
-        }
+        return utility_fields(await scorer(instance), instance["partition"], patience)
 
     await run_cached(
         instances,

@@ -50,13 +50,11 @@ def write_rows(path, rows):
             os.unlink(temporary)
 
 
-async def run_cached(instances, output_file, key_field, config, compute, concurrency=1):
-    """Recompute rows whose inputs or config changed, journaling each result as it lands.
+def plan(instances, output_file, key_field, config):
+    """Rows already valid for this config, their keys, and the instances left to compute.
 
-    `compute(instance)` returns the new fields for one instance. Finished rows go
-    to `<output_file>.partial` immediately, so an interrupted run resumes where it
-    stopped; the output file itself is only replaced once every instance is done.
-    """
+    Finished rows are journaled to `<output_file>.partial` as they land, so an
+    interrupted run resumes; `finalize` replaces the output once all are done."""
     journal = output_file + ".partial"
     existing = cached_rows(output_file) | cached_rows(journal)
     keys = {x["id"]: evaluation_key(x, config) for x in instances}
@@ -64,21 +62,37 @@ async def run_cached(instances, output_file, key_field, config, compute, concurr
         x for x in instances if existing.get(x["id"], {}).get(key_field) != keys[x["id"]]
     ]
     print(f"{output_file}: {len(instances) - len(todo)} cached, {len(todo)} to compute")
+    return existing, keys, todo
 
+
+def stamp(instance, fields, key_field, key, config):
+    return {
+        **instance,
+        **fields,
+        key_field: key,
+        key_field.removesuffix("_key") + "_config": config,
+    }
+
+
+def finalize(instances, output_file, existing):
+    write_rows(output_file, [{**x, **existing[x["id"]]} for x in instances])
+    journal = output_file + ".partial"
+    if os.path.exists(journal):
+        os.unlink(journal)
+
+
+async def run_cached(instances, output_file, key_field, config, compute, concurrency=1):
+    """Recompute rows whose inputs or config changed; `compute(instance)` returns new fields."""
+    existing, keys, todo = plan(instances, output_file, key_field, config)
     semaphore = asyncio.Semaphore(concurrency)
 
     async def one(instance):
         async with semaphore:
             fields = await compute(instance)
-        return {
-            **instance,
-            **fields,
-            key_field: keys[instance["id"]],
-            key_field.removesuffix("_key") + "_config": config,
-        }
+        return stamp(instance, fields, key_field, keys[instance["id"]], config)
 
     failures = 0
-    with open(journal, "a") as file:
+    with open(output_file + ".partial", "a") as file:
         for task in tqdm(asyncio.as_completed([one(x) for x in todo]), total=len(todo)):
             try:
                 row = await task
@@ -91,7 +105,6 @@ async def run_cached(instances, output_file, key_field, config, compute, concurr
             existing[row["id"]] = row
     if failures:
         raise RuntimeError(
-            f"{failures} instances failed; finished work kept in {journal}"
+            f"{failures} instances failed; finished work kept in {output_file}.partial"
         )
-    write_rows(output_file, [{**x, **existing[x["id"]]} for x in instances])
-    os.unlink(journal)
+    finalize(instances, output_file, existing)

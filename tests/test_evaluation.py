@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import torch
 
+from src import judge as judge_module
 from src import partition, score
 from src.evaluation_io import cached_rows, write_rows
 
@@ -68,7 +69,7 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
             partition.Partition(groups=[[0, 1]]),  # drops index 2: invalid
             partition.Partition(groups=[[2], [0, 1]]),
         ]
-        with patch.object(partition, "judge", AsyncMock(side_effect=outputs)) as j:
+        with patch.object(judge_module, "judge", AsyncMock(side_effect=outputs)) as j:
             got = await partition.partition_llm("p", ["a", "b", "c"], "m", seed=1)
         self.assertEqual(j.await_count, 2)
         self.assertEqual(sorted(got), [0, 0, 1])
@@ -141,8 +142,8 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
     async def test_llm_scores_each_generation_alone(self):
         outs = iter([score.Score(score=9), score.Score(score=3)])
 
-        async def fake_judge(model, system, user, schema):
-            self.assertNotIn('index="', user)
+        async def fake_judge(model, call, effort=None):
+            self.assertNotIn('index="', call.user)
             return next(outs)
 
         with patch.object(score, "judge", fake_judge):

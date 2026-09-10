@@ -9,7 +9,6 @@ import asyncio
 import functools
 import json
 import os
-import random
 
 import sacrebleu
 import torch
@@ -21,12 +20,12 @@ from src.common import (
     DEFAULT_JUDGE,
     DEFAULT_VERSION,
     METRIC_VERSIONS,
-    judge,
     oai_client,
     render_responses,
     version_dir,
 )
 from src.evaluation_io import run_cached
+from src.judge import Call, Stage, run_stage, shuffled_order
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 rouge_scorer = rouge_scorer.RougeScorer(["rouge1"])
@@ -198,25 +197,35 @@ class Partition(BaseModel):
     groups: list[list[int]]
 
 
+def partition_calls(instance: dict, config: dict) -> list[Call]:
+    prompt, responses = instance["prompt"], instance["generations"]
+    order = shuffled_order(prompt, len(responses), config.get("seed"))
+    shown = [responses[i] for i in order]
+    return [Call(JUDGE_SYSTEM, render_responses(prompt, shown), Partition)]
+
+
+def partition_fold(instance: dict, outputs: list, config: dict) -> dict:
+    n = len(instance["generations"])
+    order = shuffled_order(instance["prompt"], n, config.get("seed"))
+    groups = outputs[0].groups
+    if sorted(i for g in groups for i in g) != list(range(n)):
+        raise ValueError(f"not a partition of {n} responses: {groups}")
+    partition = [0] * n
+    for g, members in enumerate(groups):
+        for shown in members:
+            partition[order[shown]] = g
+    partition = canonical(partition)
+    return {"partition": partition, "distinct": len(set(partition))}
+
+
+STAGE = Stage("partition", "partition_key", partition_calls, partition_fold)
+
+
 async def partition_llm(prompt, responses, model, seed=None) -> list[int]:
     """Set-level judge; `seed` shuffles the order shown to the judge."""
-    order = list(range(len(responses)))
-    if seed is not None:
-        random.Random(f"{seed}{prompt}").shuffle(order)
-    shown = [responses[i] for i in order]
-    for attempt in range(3):
-        out = await judge(model, JUDGE_SYSTEM, render_responses(prompt, shown), Partition)
-        flat = sorted(i for g in out.groups for i in g)
-        if flat == list(range(len(responses))):
-            break
-        print(f"invalid partition (attempt {attempt}): {out.groups}")
-    else:
-        raise ValueError(f"judge never produced a valid partition for {prompt!r}")
-    partition = [0] * len(responses)
-    for g, members in enumerate(out.groups):
-        for s in members:
-            partition[order[s]] = g
-    return canonical(partition)
+    instance = {"id": prompt[:40], "prompt": prompt, "generations": responses}
+    fields = await run_stage(STAGE, instance, {"judge_model": model, "seed": seed})
+    return fields["partition"]
 
 
 def canonical(partition: list[int]) -> list[int]:
