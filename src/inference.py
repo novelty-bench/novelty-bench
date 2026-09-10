@@ -1,12 +1,13 @@
 import argparse
 import asyncio
+import json
 import os
 import time
 from abc import ABC, abstractmethod
 
 import cohere
 import torch
-from anthropic import AsyncAnthropicVertex
+from anthropic import AsyncAnthropic, AsyncAnthropicVertex, BadRequestError
 from datasets import load_dataset
 from google import genai
 from google.auth import default, transport
@@ -15,7 +16,7 @@ from openai import AsyncOpenAI
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from src.common import google_project, oai_client
-from src.evaluation_io import cached_rows, evaluation_key, write_rows
+from src.evaluation_io import run_cached
 
 
 class InferenceService(ABC):
@@ -28,16 +29,97 @@ class InferenceService(ABC):
         print("Done!")
 
 
+REFUSED = "[refused]"  # provider-side refusal; placeholders keep the row valid
+EMPTY = "[empty]"  # the model spent its whole token budget without answering
+
+
+def log_usage(model: str, usage) -> None:
+    """Append one line of token usage to $NB_USAGE_LOG, if set (no extra API calls)."""
+    path = os.environ.get("NB_USAGE_LOG")
+    if path and usage is not None:
+        with open(path, "a") as f:
+            f.write(
+                json.dumps({"model": model, **usage.model_dump(exclude_none=True)}) + "\n"
+            )
+
+
+def openai_params(
+    model, messages, max_tokens=512, temperature=1.0, reasoning_effort=None
+):
+    """Chat-completions body; reasoning models take an effort and no temperature."""
+    body = {"model": model, "messages": messages}
+    if reasoning_effort:  # the budget is shared with reasoning, so double it
+        body |= {
+            "max_completion_tokens": 2 * max_tokens,
+            "reasoning_effort": reasoning_effort,
+        }
+    else:
+        body |= {"max_tokens": max_tokens, "temperature": temperature}
+    return body
+
+
+def openai_text(completion) -> str:
+    choice = completion.choices[0]
+    if choice.finish_reason == "content_filter" or choice.message.refusal:
+        return REFUSED
+    text = choice.message.content or ""
+    # an empty visible answer is an answer, whatever the finish reason: record the
+    # placeholder rather than retrying a prompt the model keeps declining to fill
+    return text if text.strip() else EMPTY
+
+
+def anthropic_params(
+    model, messages, max_tokens=512, temperature=1.0, reasoning_effort=None
+):
+    """Messages body. With an effort: adaptive thinking, no sampling params, and a
+    max_tokens budget doubled because thinking shares it with the visible answer.
+    The last user turn carries a cache breakpoint so in-context runs reuse the prefix."""
+    system = [m["content"] for m in messages if m["role"] == "system"]
+    turns = [dict(m) for m in messages if m["role"] != "system"]
+    turns[-1]["content"] = [
+        {
+            "type": "text",
+            "text": turns[-1]["content"],
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    body = {"model": model, "messages": turns, "max_tokens": max_tokens}
+    if system:
+        body["system"] = "\n\n".join(system)
+    if reasoning_effort:
+        body |= {
+            "max_tokens": 2 * max_tokens,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": reasoning_effort},
+        }
+    else:
+        body["temperature"] = temperature
+    return body
+
+
+def anthropic_text(message) -> str:
+    if message.stop_reason == "refusal":
+        return REFUSED
+    text = "".join(block.text for block in message.content if block.type == "text")
+    return text if text.strip() else EMPTY
+
+
 class OpenAIService(InferenceService):
     def __init__(self):
         self.client = oai_client()
 
     async def generate(
-        self, model: str, messages: list[dict[str, str]], **kwargs
+        self, model: str, messages: list[dict[str, str]], n=1, **kwargs
     ) -> list[str]:
-        resp = await self.client.chat.completions.create(
-            model=model, messages=messages, **kwargs
-        )
+        body = openai_params(model, messages, **kwargs)
+        if "reasoning_effort" in body:  # reasoning models: one sample per request
+            resps = await asyncio.gather(
+                *(self.client.chat.completions.create(**body) for _ in range(n))
+            )
+            for r in resps:
+                log_usage(model, r.usage)
+            return [openai_text(r) for r in resps]
+        resp = await self.client.chat.completions.create(n=n, **body)
         return [c.message.content for c in resp.choices]
 
 
@@ -111,34 +193,33 @@ class GeminiService(InferenceService):
 
 
 class AnthropicService(InferenceService):
-    def __init__(self, project=None, region="us-east5"):
-        self.client = AsyncAnthropicVertex(
-            region=region, project_id=google_project(project)
-        )
+    """Anthropic API (ANTHROPIC_API_KEY)."""
+
+    def __init__(self):
+        self.client = AsyncAnthropic()
 
     async def generate(
         self, model: str, messages: list[dict[str, str]], n=1, **kwargs
     ) -> list[str]:
-        responses = []
-        for _ in range(n):
-            if messages[0]["role"] == "system":
-                resp = await self.client.messages.create(
-                    system=messages[0]["content"],
-                    model=model,
-                    messages=messages[1:],
-                    **kwargs,
-                )
-                responses.append(
-                    "".join(block.text for block in resp.content if block.type == "text")
-                )
-            else:
-                resp = await self.client.messages.create(
-                    model=model, messages=messages, **kwargs
-                )
-                responses.append(
-                    "".join(block.text for block in resp.content if block.type == "text")
-                )
-        return responses
+        body = anthropic_params(model, messages, **kwargs)
+        return list(await asyncio.gather(*(self.create(body) for _ in range(n))))
+
+    async def create(self, body) -> str:
+        try:
+            msg = await self.client.messages.create(**body)
+            log_usage(body["model"], msg.usage)
+            return anthropic_text(msg)
+        except BadRequestError as e:  # output-side content filter is a 400, not a refusal
+            if "content filtering" in str(e):
+                return REFUSED
+            raise
+
+
+class AnthropicVertexService(AnthropicService):
+    def __init__(self, project=None, region="us-east5"):
+        self.client = AsyncAnthropicVertex(
+            region=region, project_id=google_project(project)
+        )
 
 
 class VertexService(InferenceService):
@@ -287,7 +368,9 @@ async def run_generation(
     num_generations: int,
     sampling: str,
     max_retries: int = 10,
+    **gen_kwargs,
 ) -> list[str]:
+    """`gen_kwargs` (max_tokens, temperature, reasoning_effort) go to the service."""
     if num_generations < 1 or max_retries < 1:
         raise ValueError("Generation count and retry count must be positive")
     if sampling not in {"regenerate", "in-context", "paraphrase", "system-prompt"}:
@@ -307,20 +390,13 @@ async def run_generation(
             if sampling == "regenerate":
                 # parallel generation w/o context
                 responses = await service.generate(
-                    model=model,
-                    messages=messages,
-                    max_tokens=512,
-                    temperature=1.0,
-                    n=num_generations,
+                    model=model, messages=messages, n=num_generations, **gen_kwargs
                 )
 
             elif sampling == "in-context":
                 while len(responses) < num_generations:
                     response = await service.generate(
-                        model=model,
-                        messages=messages,
-                        max_tokens=512,
-                        temperature=1.0,
+                        model=model, messages=messages, **gen_kwargs
                     )
                     validate_generations(response, 1)
                     new_response = response[0]
@@ -339,10 +415,7 @@ async def run_generation(
                         {"role": "user", "content": prompt_paraphrases[len(responses)]}
                     ]
                     response = await service.generate(
-                        model=model,
-                        messages=messages,
-                        max_tokens=512,
-                        temperature=1.0,
+                        model=model, messages=messages, **gen_kwargs
                     )
                     validate_generations(response, 1)
                     new_response = response[0]
@@ -357,11 +430,7 @@ async def run_generation(
                     {"role": "user", "content": prompt},
                 ]
                 responses = await service.generate(
-                    model=model,
-                    messages=messages,
-                    max_tokens=512,
-                    temperature=1.0,
-                    n=num_generations,
+                    model=model, messages=messages, n=num_generations, **gen_kwargs
                 )
             else:
                 raise Exception("Unknown mode " + sampling)
@@ -382,10 +451,27 @@ async def run_generation(
             # Exponential backoff
             wait_time = min(5 * 2**attempt, 60)  # 5, 10, 20, 40, 60, 60, ... seconds
             print(
-                f"Attempt {attempt + 1} failed, retrying in {wait_time} seconds...",
+                f"Attempt {attempt + 1} failed ({e!r:.200}), retrying in {wait_time} seconds...",
                 flush=True,
             )
             await asyncio.sleep(wait_time)
+
+
+def generation_config(
+    model, mode, sampling, num_generations, max_tokens, temperature, reasoning_effort
+):
+    """Everything that defines a generation protocol; part of the cache key."""
+    return {
+        "stage": "generation",
+        "version": 2,
+        "model": model,
+        "mode": mode,
+        "sampling": sampling,
+        "num_generations": num_generations,
+        "temperature": None if reasoning_effort else temperature,
+        "max_tokens": max_tokens,
+        "reasoning_effort": reasoning_effort,
+    }
 
 
 def validate_generations(generations, expected):
@@ -404,50 +490,43 @@ async def process_prompts(
     concurrent_requests,
     sampling,
     mode=None,
+    max_tokens=512,
+    temperature=1.0,
+    reasoning_effort=None,
 ):
     """Resume matching generations; keep the previous output on any failure."""
     if num_generations < 1 or concurrent_requests < 1:
         raise ValueError("Generation count and concurrency must be positive")
     prompts = list(prompts)
-    existing = cached_rows(output_file)
-    config = {
-        "stage": "generation",
-        "version": 2,
-        "model": model,
-        "mode": mode or type(service).__name__,
-        "sampling": sampling,
-        "num_generations": num_generations,
-        "temperature": 1.0,
-        "max_tokens": 512,
-    }
-    semaphore = asyncio.Semaphore(concurrent_requests)
+    config = generation_config(
+        model,
+        mode or type(service).__name__,
+        sampling,
+        num_generations,
+        max_tokens,
+        temperature,
+        reasoning_effort,
+    )
+    gen_kwargs = {"max_tokens": max_tokens, "temperature": temperature}
+    if reasoning_effort:
+        gen_kwargs["reasoning_effort"] = reasoning_effort
 
-    async def process_single_prompt(prompt):
-        key = evaluation_key(prompt, config)
-        cached = existing.get(prompt["id"], {})
-        if cached.get("generation_key") == key:
-            validate_generations(cached["generations"], num_generations)
-            return {**prompt, **cached}
-        async with semaphore:
-            generations = await run_generation(
-                service,
-                model,
-                prompt["prompt"],
-                prompt.get("prompt_paraphrases"),
-                num_generations,
-                sampling,
-            )
+    async def compute(prompt):
+        generations = await run_generation(
+            service,
+            model,
+            prompt["prompt"],
+            prompt.get("prompt_paraphrases"),
+            num_generations,
+            sampling,
+            **gen_kwargs,
+        )
         validate_generations(generations, num_generations)
-        return {
-            **prompt,
-            "model": model,
-            "generations": generations,
-            "generation_key": key,
-            "generation_config": config,
-        }
+        return {"model": model, "generations": generations}
 
-    results = await asyncio.gather(*(process_single_prompt(prompt) for prompt in prompts))
-    write_rows(output_file, results)
+    await run_cached(
+        prompts, output_file, "generation_key", config, compute, concurrent_requests
+    )
 
 
 async def main():
@@ -461,6 +540,7 @@ async def main():
             "cohere",
             "gemini",
             "anthropic",
+            "anthropic-vertex",
             "vertex",
             "deepseek",
             "transformers",
@@ -495,6 +575,16 @@ async def main():
         default=10,
         help="Number of concurrent requests",
     )
+    parser.add_argument("--max-tokens", type=int, default=512)
+    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=["low", "medium", "high"],
+        help="reasoning models: sets the effort and drops sampling parameters",
+    )
+    parser.add_argument(
+        "--limit", type=int, help="only the first N prompts (smoke tests)"
+    )
     parser.add_argument("--project", help="Google Cloud project for Vertex providers")
     parser.add_argument("--region", help="Google Cloud region for Vertex providers")
     args = parser.parse_args()
@@ -502,6 +592,8 @@ async def main():
         parser.error("--num-generations and --concurrent-requests must be positive")
 
     dataset = load_dataset("yimingzhang/novelty-bench", split=args.data)
+    if args.limit:
+        dataset = dataset.select(range(args.limit))
     eval_dir = (
         args.eval_dir if args.eval_dir else os.path.join(f"{args.data}-evals", args.model)
     )
@@ -520,7 +612,9 @@ async def main():
     elif args.mode == "gemini":
         service = GeminiService()
     elif args.mode == "anthropic":
-        service = AnthropicService(args.project, args.region or "us-east5")
+        service = AnthropicService()
+    elif args.mode == "anthropic-vertex":
+        service = AnthropicVertexService(args.project, args.region or "us-east5")
     elif args.mode == "vertex":
         service = VertexService(args.project, args.region or "us-central1")
     elif args.mode == "deepseek":
@@ -541,6 +635,9 @@ async def main():
             concurrent_requests,
             args.sampling,
             mode=args.mode,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            reasoning_effort=args.reasoning_effort,
         )
 
     finally:

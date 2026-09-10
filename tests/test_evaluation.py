@@ -6,8 +6,11 @@ from unittest.mock import AsyncMock, patch
 
 import torch
 
+from src import judge as judge_module
 from src import partition, score
 from src.evaluation_io import cached_rows, write_rows
+
+CONFIG = {"stage": "test"}
 
 
 class EvaluationTests(unittest.IsolatedAsyncioTestCase):
@@ -52,54 +55,155 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
         ):
             await partition.equivalence_check_gpt4("p", "a", "b")
 
+    async def test_pairwise_partition_joins_first_matching_head(self):
+        async def same_first_letter(prompt, a, b):
+            return a[0] == b[0]
+
+        got = await partition.partition_pairwise(
+            "p", ["ax", "bx", "ay", "by"], same_first_letter
+        )
+        self.assertEqual(got, [0, 1, 0, 1])
+
+    async def test_persistently_invalid_partition_is_folded_leniently(self):
+        bad = partition.Partition(groups=[[0, 1], [0]])  # drops 2, repeats 0
+        with patch.object(judge_module, "judge", AsyncMock(return_value=bad)) as j:
+            got = await partition.partition_llm("p", ["a", "b", "c"], "m")
+        self.assertEqual(j.await_count, 3)
+        self.assertEqual(got, [0, 0, 1])
+
+    async def test_llm_partition_unshuffles_and_retries_invalid(self):
+        outputs = [
+            partition.Partition(groups=[[0, 1]]),  # drops index 2: invalid
+            partition.Partition(groups=[[2], [0, 1]]),
+        ]
+        with patch.object(judge_module, "judge", AsyncMock(side_effect=outputs)) as j:
+            got = await partition.partition_llm("p", ["a", "b", "c"], "m", seed=1)
+        self.assertEqual(j.await_count, 2)
+        self.assertEqual(sorted(got), [0, 0, 1])
+        self.assertEqual(got[0], 0)  # canonical: first response is class 0
+
     async def test_partition_cache_and_failure(self):
         row = {"id": "a", "prompt": "p", "generations": ["a", "b"]}
-        checker = AsyncMock(return_value=False)
-        checker.__name__ = "test_checker"
+        alg = AsyncMock(return_value=[0, 1])
         with tempfile.TemporaryDirectory() as directory:
             path = str(Path(directory) / "partitions.jsonl")
-            await partition.process_instances([row], path, checker)
+            await partition.process_instances([row], path, alg, CONFIG)
             self.assertEqual(cached_rows(path)["a"]["distinct"], 2)
-            await partition.process_instances([row], path, checker)
-            self.assertEqual(checker.await_count, 1)
-            checker.side_effect = RuntimeError("unavailable")
+            await partition.process_instances([row], path, alg, CONFIG)
+            self.assertEqual(alg.await_count, 1)
+            alg.side_effect = RuntimeError("unavailable")
             before = Path(path).read_bytes()
             with self.assertRaises(RuntimeError):
                 await partition.process_instances(
-                    [dict(row, prompt="changed")], path, checker
+                    [dict(row, prompt="changed")], path, alg, CONFIG
                 )
             self.assertEqual(Path(path).read_bytes(), before)
 
+    async def test_journal_resumes_after_partial_failure(self):
+        rows = [{"id": i, "prompt": i, "generations": ["a"]} for i in "xy"]
+
+        async def flaky(prompt, generations):
+            if prompt == "y":
+                raise RuntimeError("unavailable")
+            return [0]
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "partitions.jsonl")
+            with self.assertRaises(RuntimeError):
+                await partition.process_instances(rows, path, flaky, CONFIG)
+            self.assertFalse(Path(path).exists())
+            self.assertEqual(set(cached_rows(path + ".partial")), {"x"})
+            alg = AsyncMock(return_value=[0])
+            await partition.process_instances(rows, path, alg, CONFIG)
+            self.assertEqual(alg.await_count, 1)  # x came from the journal
+            self.assertEqual(set(cached_rows(path)), {"x", "y"})
+            self.assertFalse(Path(path + ".partial").exists())
+
     async def test_score_cache_invalidated_by_partition_and_patience(self):
         row = {"id": "a", "prompt": "p", "generations": ["a", "b"], "partition": [0, 1]}
-        with (
-            tempfile.TemporaryDirectory() as directory,
-            patch.object(
-                score, "score_partition_rm", AsyncMock(return_value=([5, 10], [5, 10]))
-            ) as rm,
-        ):
+        scorer = AsyncMock(return_value=[5, 10])
+        with tempfile.TemporaryDirectory() as directory:
             path = str(Path(directory) / "scores.jsonl")
-            await score.process_instances([row], path, 0.8)
-            await score.process_instances([row], path, 0.8)
-            self.assertEqual(rm.await_count, 1)
-            rm.return_value = ([5, 0], [5])
-            await score.process_instances([dict(row, partition=[0, 0])], path, 0.8)
-            self.assertEqual(cached_rows(path)["a"]["generation_scores"], [5, 0])
-            rm.return_value = ([5, 10], [5, 10])
-            await score.process_instances([row], path, 0)
+            await score.process_instances([row], path, scorer, CONFIG, 0.8)
+            await score.process_instances([row], path, scorer, CONFIG, 0.8)
+            self.assertEqual(scorer.await_count, 1)
+            await score.process_instances(
+                [dict(row, partition=[0, 0])], path, scorer, CONFIG, 0.8
+            )
+            self.assertEqual(cached_rows(path)["a"]["generation_scores"], [5, 10])
+            self.assertEqual(cached_rows(path)["a"]["partition_scores"], [5])
+            await score.process_instances([row], path, scorer, CONFIG, 0)
             self.assertEqual(cached_rows(path)["a"]["utility"], 5)
-            self.assertEqual(rm.await_count, 3)
+            self.assertEqual(scorer.await_count, 3)
 
     async def test_legacy_cache_does_not_skip_new_evaluation(self):
         row = {"id": "a", "prompt": "p", "generations": ["a"], "partition": [0]}
-        with (
-            tempfile.TemporaryDirectory() as directory,
-            patch.object(
-                score, "score_partition_rm", AsyncMock(return_value=([5], [5]))
-            ) as rm,
-        ):
+        scorer = AsyncMock(return_value=[5])
+        with tempfile.TemporaryDirectory() as directory:
             path = str(Path(directory) / "scores.jsonl")
             write_rows(path, [dict(row, utility=10)])
-            await score.process_instances([row], path, 0.8)
-            self.assertEqual(rm.await_count, 1)
+            await score.process_instances([row], path, scorer, CONFIG, 0.8)
+            self.assertEqual(scorer.await_count, 1)
             self.assertEqual(cached_rows(path)["a"]["utility"], 5)
+
+    async def test_refused_call_is_rescored_by_the_fallback_judge(self):
+        from src.judge import JudgeRefusal, run_stage
+
+        async def fake_judge(model, call, effort=None):
+            if model == "main":
+                raise JudgeRefusal("declined")
+            return score.Score(score=4)
+
+        inst = {"id": "a", "prompt": "p", "generations": ["x"], "partition": [0]}
+        with patch.object(judge_module, "judge", fake_judge):
+            fields = await run_stage(
+                score.STAGE,
+                inst,
+                {"judge_model": "main", "patience": 0.8},
+                fallback="backup",
+            )
+        self.assertEqual(fields["generation_scores"], [4])
+        self.assertEqual(fields["fallback_judge"], "backup")
+        self.assertEqual(fields["fallback_calls"], [0])
+
+    async def test_judge_refusal_is_recorded_as_unscored(self):
+        from src.judge import JudgeRefusal, run_stage
+
+        inst = {"id": "a", "prompt": "p", "generations": ["x", "y"], "partition": [0, 1]}
+        with patch.object(
+            judge_module, "judge", AsyncMock(side_effect=JudgeRefusal("no"))
+        ):
+            fields = await run_stage(
+                score.STAGE, inst, {"judge_model": "m", "patience": 0.8}
+            )
+        self.assertEqual(fields["generation_scores"], [None, None])
+        self.assertIsNone(fields["utility"])
+        self.assertEqual(fields["unscored"], "judge_refusal")
+        self.assertEqual(fields["distinct"], 2)
+
+    async def test_refusal_without_a_handler_propagates(self):
+        from src.judge import JudgeRefusal, run_stage
+
+        inst = {"id": "a", "prompt": "p", "generations": ["x", "y"]}
+        with (
+            patch.object(
+                judge_module, "judge", AsyncMock(side_effect=JudgeRefusal("no"))
+            ),
+            self.assertRaises(JudgeRefusal),
+        ):
+            await run_stage(partition.STAGE, inst, {"judge_model": "m"})
+
+    async def test_llm_scores_class_heads_alone(self):
+        outs = iter([score.Score(score=9), score.Score(score=3)])
+
+        async def fake_judge(model, call, effort=None):
+            self.assertNotIn('index="', call.user)
+            return next(outs)
+
+        inst = {"prompt": "p", "generations": ["a", "b", "c"], "partition": [0, 0, 1]}
+        with patch.object(judge_module, "judge", fake_judge):
+            got = await score.score_llm(inst, "m")
+        self.assertEqual(got, [9, None, 3])
+        fields = score.utility_fields(got, inst["partition"], 0.8)
+        self.assertEqual(fields["partition_scores"], [9, 3])
+        self.assertEqual(fields["distinct"], 2)
