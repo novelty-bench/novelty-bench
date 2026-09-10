@@ -340,6 +340,31 @@ and writes to `v1.0/` rather than `v1.1/`.
   python -m unittest discover -s tests
   ```
 
+## Where the data lives
+
+Git keeps the metric; the dataset repo keeps the corpus. A `scores.jsonl` row
+carries both the ten responses and the numbers computed from them, and the
+responses are ~97% of the bytes — so the committed copies have the
+`generations` field dropped (`python -m src.slim`) and every other field
+intact. `python -m src.summarize` still reproduces a `summary.json` from them,
+and a diff on a judged file shows a changed number rather than a wall of prose.
+
+| where | what |
+|---|---|
+| this repo | `summary.json`, slim `partitions.jsonl` and `scores.jsonl`, and the curated split's `generations.jsonl` — 100 prompts of real response text, so a checkout is self-contained |
+| [`yimingzhang/novelty-bench`](https://huggingface.co/datasets/yimingzhang/novelty-bench) | every run's full-fidelity files under `results/<run>/nb-<split>/`, response text included |
+| nowhere | `batch.*` working files from the Batches API |
+
+```shell
+# fetch a run's full files, or one of them
+python -m src.publish pull --run 2026-09-10_claude-opus-5 --eval-dir /tmp/opus-5
+python -m src.publish pull --run 2026-09-10_claude-opus-5 --eval-dir /tmp/opus-5 \
+  --file nb-wildchat/generations.jsonl
+
+# publish your own run (needs a write token: huggingface-cli login)
+python -m src.publish push --eval-dir evaluation/<date + name> --repo-id <you>/<dataset>
+```
+
 ## 🏆 Leaderboard Participation
 
 If you are interested in submitting your model to the NoveltyBench Leaderboard, please do the following:
@@ -347,30 +372,20 @@ If you are interested in submitting your model to the NoveltyBench Leaderboard, 
 1. Fork this repository;
 2. Clone your fork;
 3. Under `evaluation/`, create a new folder with the submission date and your model name (e.g., `2025-03-27_gemini-1.5-pro`);
-4. Within the folder (`evaluation/<date + name>/`), please include the following **required** assets:
-  - Follow the instruction in the Basic Workflow section to get the following files for each subset _NB-Curated_ and _NB-WildChat_:
+4. Within the folder (`evaluation/<date + name>/`), commit these files for each
+   subset _NB-Curated_ and _NB-WildChat_:
     ```
-    - generations.jsonl
-    - v1.1/partitions.jsonl
-    - v1.1/scores.jsonl
+    - generations.jsonl        (curated only; see Where the data lives)
+    - v1.1/partitions.jsonl    slim
+    - v1.1/scores.jsonl        slim
     - v1.1/summary.json
     ```
-  - Your final folder should look like:
-    ```
-    - evaluation/
-      - <date + name>/
-        - nb-curated/
-          - generations.jsonl
-          - v1.1/
-            - partitions.jsonl
-            - scores.jsonl
-            - summary.json
-        - nb-wildchat/
-          - generations.jsonl
-          - v1.1/
-            - partitions.jsonl
-            - scores.jsonl
-            - summary.json
+   `evaluation/2026-09-10_claude-opus-5/README.md` is the format reference: it
+   names every file and field. Slim the two judged files before committing, and
+   push the full-fidelity run to a dataset repo:
+    ```shell
+    python -m src.slim evaluation/<date + name>/nb-*/v1.1/*.jsonl
+    python -m src.publish push --eval-dir evaluation/<date + name>
     ```
   - Generate with the v1.1 protocol described in
     [Adding a model](#adding-a-model-v11-protocol): 10 responses per prompt at
