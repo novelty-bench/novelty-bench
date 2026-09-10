@@ -127,7 +127,19 @@ def score_fold(instance: dict, outputs: list, config: dict) -> dict:
     return utility_fields(scores, instance["partition"], config["patience"])
 
 
-STAGE = Stage("score", "score_key", score_calls, score_fold)
+def score_refused(instance: dict) -> dict:
+    """The judge declined this instance: nothing is scored, and the summary
+    excludes it rather than counting a refusal as a bad answer."""
+    return {
+        "generation_scores": [None] * len(instance["generations"]),
+        "partition_scores": [],
+        "utility": None,
+        "distinct": len(set(instance["partition"])),
+        "unscored": "judge_refusal",
+    }
+
+
+STAGE = Stage("score", "score_key", score_calls, score_fold, score_refused)
 
 
 async def score_llm(instance, model) -> list[int | None]:

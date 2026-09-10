@@ -21,15 +21,22 @@ class Call:
     schema: type[BaseModel]
 
 
+class JudgeRefusal(ValueError):
+    """The judge declined to answer; no retry will change that."""
+
+
 @dataclass(frozen=True)
 class Stage:
     """One evaluation stage: the judge calls an instance needs, and how to fold the
-    outputs into row fields. `fold` raises ValueError on invalid judge output."""
+    outputs into row fields. `fold` raises ValueError on invalid judge output;
+    `on_refusal`, where a stage defines one, gives the fields to record instead
+    when the judge declines the instance outright."""
 
     name: str
     key_field: str
     calls: Callable[[dict, dict], list[Call]]
     fold: Callable[[dict, list, dict], dict]
+    on_refusal: Callable[[dict], dict] | None = None
 
 
 def shuffled_order(prompt: str, n: int, seed: int | None) -> list[int]:
@@ -71,6 +78,8 @@ def anthropic_params(model: str, call: Call, effort: str = DEFAULT_EFFORT) -> di
 
 
 def parse_message(msg, schema: type[BaseModel]):
+    if msg.stop_reason == "refusal":
+        raise JudgeRefusal("judge declined to answer")
     if msg.stop_reason != "end_turn":
         raise ValueError(f"judge stopped with {msg.stop_reason}")
     text = next((b.text for b in msg.content if b.type == "text"), "")
@@ -110,9 +119,15 @@ async def run_stage(
     """Judge one instance live: all its calls concurrently, then fold; retried on invalid output."""
     model, effort = config["judge_model"], config.get("effort", DEFAULT_EFFORT)
     for attempt in range(attempts):
-        outputs = await asyncio.gather(
-            *(judge(model, c, effort) for c in stage.calls(instance, config))
-        )
+        try:
+            outputs = await asyncio.gather(
+                *(judge(model, c, effort) for c in stage.calls(instance, config))
+            )
+        except JudgeRefusal:
+            if stage.on_refusal is None:
+                raise
+            print(f"{stage.name}: judge declined {instance['id']}; recorded unscored")
+            return stage.on_refusal(instance)
         try:
             return stage.fold(instance, outputs, config)
         except ValueError as e:

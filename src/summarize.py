@@ -11,8 +11,14 @@ from src.common import DEFAULT_VERSION, METRIC_VERSIONS, version_dir
 def summarize(df: pd.DataFrame, version: str) -> dict:
     summary = {"version": version}
 
-    summary["mean_distinct"] = np.mean(df["partition_scores"].map(len))
-    summary["mean_utility"] = np.mean(df["utility"])
+    # An instance the judge declined carries no scores; it is left out of the
+    # utility mean rather than counted as a bad answer, and reported instead.
+    scored = df[df["utility"].notna()] if "utility" in df else df
+    summary["mean_distinct"] = np.mean(scored["partition_scores"].map(len))
+    summary["mean_utility"] = np.mean(scored["utility"])
+    if len(scored) < len(df):
+        summary["unscored"] = int(len(df) - len(scored))
+        summary["n_scored"] = int(len(scored))
 
     return summary
 

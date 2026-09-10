@@ -146,6 +146,33 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(scorer.await_count, 1)
             self.assertEqual(cached_rows(path)["a"]["utility"], 5)
 
+    async def test_judge_refusal_is_recorded_as_unscored(self):
+        from src.judge import JudgeRefusal, run_stage
+
+        inst = {"id": "a", "prompt": "p", "generations": ["x", "y"], "partition": [0, 1]}
+        with patch.object(
+            judge_module, "judge", AsyncMock(side_effect=JudgeRefusal("no"))
+        ):
+            fields = await run_stage(
+                score.STAGE, inst, {"judge_model": "m", "patience": 0.8}
+            )
+        self.assertEqual(fields["generation_scores"], [None, None])
+        self.assertIsNone(fields["utility"])
+        self.assertEqual(fields["unscored"], "judge_refusal")
+        self.assertEqual(fields["distinct"], 2)
+
+    async def test_refusal_without_a_handler_propagates(self):
+        from src.judge import JudgeRefusal, run_stage
+
+        inst = {"id": "a", "prompt": "p", "generations": ["x", "y"]}
+        with (
+            patch.object(
+                judge_module, "judge", AsyncMock(side_effect=JudgeRefusal("no"))
+            ),
+            self.assertRaises(JudgeRefusal),
+        ):
+            await run_stage(partition.STAGE, inst, {"judge_model": "m"})
+
     async def test_llm_scores_class_heads_alone(self):
         outs = iter([score.Score(score=9), score.Score(score=3)])
 

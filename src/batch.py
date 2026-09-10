@@ -19,7 +19,13 @@ from anthropic.types.messages.batch_create_params import Request
 from src import partition, score
 from src.common import DEFAULT_JUDGE, DEFAULT_VERSION, METRIC_VERSIONS, version_dir
 from src.evaluation_io import finalize, plan, stamp
-from src.judge import DEFAULT_EFFORT, anthropic_params, parse_message, run_stage
+from src.judge import (
+    DEFAULT_EFFORT,
+    JudgeRefusal,
+    anthropic_params,
+    parse_message,
+    run_stage,
+)
 
 STAGES = {"partition": partition.STAGE, "score": score.STAGE}
 
@@ -101,6 +107,11 @@ async def collect(client, stage, eval_dir, vdir):
                     parse_message(raw[x["id"]][k], c.schema) for k, c in enumerate(calls)
                 ]
                 fields = stage.fold(x, outputs, config)
+            except JudgeRefusal:
+                if stage.on_refusal is None:
+                    raise
+                print(f"{x['id']}: judge declined; recorded unscored")
+                fields = stage.on_refusal(x)
             except (KeyError, ValueError) as e:
                 print(f"{x['id']}: {e!r}; re-judging live")
                 retry.append(x)
