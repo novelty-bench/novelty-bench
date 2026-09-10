@@ -1,4 +1,4 @@
-"""Verify historical counts and utility after the one-time distinct correction."""
+"""Verify historical v1.0 counts and utility after the one-time distinct correction."""
 
 import json
 import unittest
@@ -13,14 +13,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class SavedEvaluationTests(unittest.TestCase):
     def test_saved_summaries_and_corrected_fields(self):
-        paths = sorted((ROOT / "evaluation").glob("*/*/scores.jsonl"))
+        paths = sorted((ROOT / "evaluation").glob("*/*/v1.0/scores.jsonl"))
         self.assertEqual(len(paths), 8)
         count = 0
         for path in paths:
             with self.subTest(path=str(path)):
                 rows = [json.loads(line) for line in path.read_text().splitlines()]
                 stored = json.loads(path.with_name("summary.json").read_text())
-                original = summarize(pd.DataFrame(rows))
+                original = summarize(pd.DataFrame(rows), "1.0")
                 self.assertAlmostEqual(original["mean_distinct"], stored["mean_distinct"])
                 self.assertAlmostEqual(original["mean_utility"], stored["mean_utility"])
                 for row in rows:
@@ -39,7 +39,7 @@ class SavedEvaluationTests(unittest.TestCase):
         self.assertEqual(count, 4400)
 
     def test_saved_partition_counts(self):
-        for path in (ROOT / "evaluation").glob("*/*/partitions.jsonl"):
+        for path in (ROOT / "evaluation").glob("*/*/v1.0/partitions.jsonl"):
             with self.subTest(path=str(path)):
                 for line in path.read_text().splitlines():
                     row = json.loads(line)

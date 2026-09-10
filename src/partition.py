@@ -1,22 +1,34 @@
+"""Partition each prompt's generations into equivalence classes.
+
+v1.0 algorithms judge pairs (a response joins the first class whose head it
+matches); the v1.1 `llm` algorithm sees all generations at once.
+"""
+
 import argparse
 import asyncio
 import functools
+import json
 import os
+import random
 
 import sacrebleu
 import torch
-from datasets import load_dataset
-from evaluate import load
 from pydantic import BaseModel
 from rouge_score import rouge_scorer
-from tqdm.auto import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from src.common import oai_client
-from src.evaluation_io import cached_rows, evaluation_key, write_rows
+from src.common import (
+    DEFAULT_JUDGE,
+    DEFAULT_VERSION,
+    METRIC_VERSIONS,
+    judge,
+    oai_client,
+    render_responses,
+    version_dir,
+)
+from src.evaluation_io import run_cached
 
-CONCURRENT_REQUESTS = 1
-
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 rouge_scorer = rouge_scorer.RougeScorer(["rouge1"])
 
 
@@ -27,12 +39,13 @@ def load_judge_client():
 
 @functools.cache
 def load_bertscorer():
+    from evaluate import load
+
     return load("bertscore")
 
 
 @functools.cache
 def load_deberta_tokenizer_and_model():
-    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-large")
     model = AutoModelForSequenceClassification.from_pretrained(
         "yimingzhang/deberta-v3-large-generation-similarity"
@@ -49,8 +62,7 @@ async def bleu(prompt: str, s1: str, s2: str):
 
 
 async def rouge1(prompt: str, s1: str, s2: str):
-    rouge_eval = rouge_scorer.score(s1, s2)
-    return rouge_eval["rouge1"].fmeasure
+    return rouge_scorer.score(s1, s2)["rouge1"].fmeasure
 
 
 async def bertscore(prompt: str, s1: str, s2: str):
@@ -77,7 +89,6 @@ async def classifier_score(prompt: str, s1: str, s2: str):
         prompt_len = input_ids.index(tokenizer.sep_token_id) + 1
     token_type_ids = [0] * prompt_len + [1] * (len(input_ids) - prompt_len)
 
-    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     iids = torch.tensor(input_ids, device=DEVICE, dtype=torch.int64)
     tids = torch.tensor(token_type_ids, device=DEVICE, dtype=torch.int64)
 
@@ -91,7 +102,6 @@ async def equivalence_check_gpt4(prompt: str, response_0: str, response_1: str) 
     class Equivalence(BaseModel):
         equivalent: bool
 
-    """Asynchronously checks equivalence between two responses."""
     messages = [
         {
             "role": "system",
@@ -133,8 +143,7 @@ async def equivalence_check_bertscore(
     response_0: str,
     response_1: str,
 ) -> bool:
-    scores = await bertscore(prompt, response_0, response_1)
-    return scores > 0.719
+    return await bertscore(prompt, response_0, response_1) > 0.719
 
 
 def maybe_test_equality(response_0: str, response_1: str) -> bool | None:
@@ -157,101 +166,133 @@ async def equivalence_check_classifier(
     return score > 0.102
 
 
-async def partition_responses(
-    prompt: str,
-    responses: list[str],
-    equivalence_alg,
-) -> list[int]:
-    """Partitions responses into equivalence classes."""
+async def partition_pairwise(prompt, responses, equivalence_alg) -> list[int]:
+    """Each response joins the first class whose head it matches."""
     if not responses:
         raise ValueError("At least one response is required")
-    equivalence_classes = []
+    heads = []
     partition = [-1] * len(responses)
-
-    for i in range(len(responses)):
-        if partition[i] >= 0:
-            continue
-
-        current_class = [responses[i]]
-        partition[i] = len(equivalence_classes)
-
-        for j in range(i + 1, len(responses)):
-            if partition[j] == -1 and await equivalence_alg(
-                prompt,
-                current_class[0],
-                responses[j],
-            ):
-                current_class.append(responses[j])
-                partition[j] = len(equivalence_classes)
-
-        equivalence_classes.append(current_class)
-
-    assert all(p >= 0 for p in partition)
+    for i, r in enumerate(responses):
+        for c, head in enumerate(heads):
+            if await equivalence_alg(prompt, head, r):
+                partition[i] = c
+                break
+        else:
+            partition[i] = len(heads)
+            heads.append(r)
     return partition
 
 
-EQUIVALENCE_ALGS = {
-    "gpt4": equivalence_check_gpt4,
-    "unigram": equivalence_check_unigram,
-    "bertscore": equivalence_check_bertscore,
-    "classifier": equivalence_check_classifier,
+JUDGE_SYSTEM = """\
+A language model was asked the same prompt several times. Partition its \
+responses into groups of equivalent answers.
+
+Two responses are equivalent if a user who had read one would gain essentially \
+nothing from the other: the same central answer, recommendation, plot, argument \
+or image, differing only in wording, formatting, length, ordering or minor \
+detail. They are distinct if the central content differs, even when structure \
+or register is shared. A list is distinct only if most of its items differ."""
+
+
+class Partition(BaseModel):
+    groups: list[list[int]]
+
+
+async def partition_llm(prompt, responses, model, seed=None) -> list[int]:
+    """Set-level judge; `seed` shuffles the order shown to the judge."""
+    order = list(range(len(responses)))
+    if seed is not None:
+        random.Random(f"{seed}{prompt}").shuffle(order)
+    shown = [responses[i] for i in order]
+    for attempt in range(3):
+        out = await judge(model, JUDGE_SYSTEM, render_responses(prompt, shown), Partition)
+        flat = sorted(i for g in out.groups for i in g)
+        if flat == list(range(len(responses))):
+            break
+        print(f"invalid partition (attempt {attempt}): {out.groups}")
+    else:
+        raise ValueError(f"judge never produced a valid partition for {prompt!r}")
+    partition = [0] * len(responses)
+    for g, members in enumerate(out.groups):
+        for s in members:
+            partition[order[s]] = g
+    return canonical(partition)
+
+
+def canonical(partition: list[int]) -> list[int]:
+    """Relabel classes 0, 1, 2... in order of first appearance."""
+    seen: dict[int, int] = {}
+    return [seen.setdefault(g, len(seen)) for g in partition]
+
+
+PARTITION_ALGS = {
+    "gpt4": functools.partial(partition_pairwise, equivalence_alg=equivalence_check_gpt4),
+    "unigram": functools.partial(
+        partition_pairwise, equivalence_alg=equivalence_check_unigram
+    ),
+    "bertscore": functools.partial(
+        partition_pairwise, equivalence_alg=equivalence_check_bertscore
+    ),
+    "classifier": functools.partial(
+        partition_pairwise, equivalence_alg=equivalence_check_classifier
+    ),
+    "llm": partition_llm,
 }
+DEFAULT_ALG = {"1.0": "classifier", "1.1": "llm"}
+
+INPUT_FIELDS = ["id", "prompt", "generations", "model", "prompt_paraphrases"]
 
 
-async def process_instances(instances, output_file, equivalence_alg):
-    """Reuse only matching inputs/configuration; preserve output on failures."""
-    existing = cached_rows(output_file)
-    config = {"stage": "partition", "version": 2, "algorithm": equivalence_alg.__name__}
-    semaphore = asyncio.Semaphore(CONCURRENT_REQUESTS)
+def load_instances(eval_dir: str) -> list[dict]:
+    """Read generations.jsonl, or recover generations from a prior version's output
+    (versioned subdir, or the pre-1.1 flat layout)."""
+    candidates = [os.path.join(eval_dir, "generations.jsonl")] + [
+        os.path.join(eval_dir, sub, f)
+        for sub in [f"v{v}" for v in METRIC_VERSIONS] + [""]
+        for f in ["partitions.jsonl", "scores.jsonl"]
+    ]
+    path = next(p for p in candidates if os.path.exists(p))
+    with open(path) as f:
+        rows = [json.loads(line) for line in f]
+    return [{k: r[k] for k in INPUT_FIELDS if k in r} for r in rows]
 
-    async def process_single_instance(instance):
-        key = evaluation_key(instance, config)
-        cached = existing.get(instance["id"], {})
-        if cached.get("partition_key") == key:
-            return {**instance, **cached}
-        async with semaphore:
-            partition = await partition_responses(
-                instance["prompt"], instance["generations"], equivalence_alg
-            )
-            return {
-                **instance,
-                "partition": partition,
-                "distinct": len(set(partition)),
-                "partition_key": key,
-                "partition_config": config,
-            }
 
-    tasks = [process_single_instance(instance) for instance in instances]
-    results = []
-    for task in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
-        results.append(await task)
-    write_rows(output_file, results)
+async def process_instances(instances, output_file, partition_alg, config, concurrency=1):
+    async def compute(instance):
+        partition = await partition_alg(instance["prompt"], instance["generations"])
+        return {"partition": partition, "distinct": len(set(partition))}
+
+    await run_cached(
+        instances, output_file, "partition_key", config, compute, concurrency
+    )
 
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--alg",
-        default="classifier",
-        help="Equivalence testing method",
-        choices=EQUIVALENCE_ALGS,
-    )
-    parser.add_argument(
-        "--eval-dir", help="Directory to save evaluation results", required=True
-    )
+    parser.add_argument("--eval-dir", required=True, nargs="+")
+    parser.add_argument("--version", default=DEFAULT_VERSION, choices=METRIC_VERSIONS)
+    parser.add_argument("--alg", choices=PARTITION_ALGS)
+    parser.add_argument("--judge-model", default=DEFAULT_JUDGE)
+    parser.add_argument("--seed", type=int, help="shuffle response order shown to judge")
+    parser.add_argument("--concurrency", type=int, default=1)
     args = parser.parse_args()
-    equivalence_alg = EQUIVALENCE_ALGS[args.alg]
 
-    eval_dir = args.eval_dir
-    instances = load_dataset(
-        "json",
-        data_files=os.path.join(eval_dir, "generations.jsonl"),
-        split="train",
-    )
+    alg = args.alg or DEFAULT_ALG[args.version]
+    partition_alg = PARTITION_ALGS[alg]
+    config = {"stage": "partition", "version": args.version, "alg": alg}
+    if alg == "llm":
+        partition_alg = functools.partial(
+            partition_alg, model=args.judge_model, seed=args.seed
+        )
+        config |= {"judge_model": args.judge_model, "seed": args.seed}
 
-    # Process instances and save results
-    output_file = os.path.join(eval_dir, "partitions.jsonl")
-    await process_instances(instances, output_file, equivalence_alg)
+    for eval_dir in args.eval_dir:
+        output_file = os.path.join(
+            version_dir(eval_dir, args.version), "partitions.jsonl"
+        )
+        await process_instances(
+            load_instances(eval_dir), output_file, partition_alg, config, args.concurrency
+        )
 
 
 if __name__ == "__main__":

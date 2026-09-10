@@ -180,6 +180,7 @@ data/*
 !data/train.jsonl
 !data/val.jsonl
 eval*/
+!evaluation/
 slurm_output/
 *.tar.gz
 .vscode/

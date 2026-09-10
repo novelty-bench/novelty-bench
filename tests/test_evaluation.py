@@ -9,6 +9,8 @@ import torch
 from src import partition, score
 from src.evaluation_io import cached_rows, write_rows
 
+CONFIG = {"stage": "test"}
+
 
 class EvaluationTests(unittest.IsolatedAsyncioTestCase):
     async def test_classifier_disables_gradients_inside_coroutine(self):
@@ -52,54 +54,96 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
         ):
             await partition.equivalence_check_gpt4("p", "a", "b")
 
+    async def test_pairwise_partition_joins_first_matching_head(self):
+        async def same_first_letter(prompt, a, b):
+            return a[0] == b[0]
+
+        got = await partition.partition_pairwise(
+            "p", ["ax", "bx", "ay", "by"], same_first_letter
+        )
+        self.assertEqual(got, [0, 1, 0, 1])
+
+    async def test_llm_partition_unshuffles_and_retries_invalid(self):
+        outputs = [
+            partition.Partition(groups=[[0, 1]]),  # drops index 2: invalid
+            partition.Partition(groups=[[2], [0, 1]]),
+        ]
+        with patch.object(partition, "judge", AsyncMock(side_effect=outputs)) as j:
+            got = await partition.partition_llm("p", ["a", "b", "c"], "m", seed=1)
+        self.assertEqual(j.await_count, 2)
+        self.assertEqual(sorted(got), [0, 0, 1])
+        self.assertEqual(got[0], 0)  # canonical: first response is class 0
+
     async def test_partition_cache_and_failure(self):
         row = {"id": "a", "prompt": "p", "generations": ["a", "b"]}
-        checker = AsyncMock(return_value=False)
-        checker.__name__ = "test_checker"
+        alg = AsyncMock(return_value=[0, 1])
         with tempfile.TemporaryDirectory() as directory:
             path = str(Path(directory) / "partitions.jsonl")
-            await partition.process_instances([row], path, checker)
+            await partition.process_instances([row], path, alg, CONFIG)
             self.assertEqual(cached_rows(path)["a"]["distinct"], 2)
-            await partition.process_instances([row], path, checker)
-            self.assertEqual(checker.await_count, 1)
-            checker.side_effect = RuntimeError("unavailable")
+            await partition.process_instances([row], path, alg, CONFIG)
+            self.assertEqual(alg.await_count, 1)
+            alg.side_effect = RuntimeError("unavailable")
             before = Path(path).read_bytes()
             with self.assertRaises(RuntimeError):
                 await partition.process_instances(
-                    [dict(row, prompt="changed")], path, checker
+                    [dict(row, prompt="changed")], path, alg, CONFIG
                 )
             self.assertEqual(Path(path).read_bytes(), before)
 
+    async def test_journal_resumes_after_partial_failure(self):
+        rows = [{"id": i, "prompt": i, "generations": ["a"]} for i in "xy"]
+
+        async def flaky(prompt, generations):
+            if prompt == "y":
+                raise RuntimeError("unavailable")
+            return [0]
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "partitions.jsonl")
+            with self.assertRaises(RuntimeError):
+                await partition.process_instances(rows, path, flaky, CONFIG)
+            self.assertFalse(Path(path).exists())
+            self.assertEqual(set(cached_rows(path + ".partial")), {"x"})
+            alg = AsyncMock(return_value=[0])
+            await partition.process_instances(rows, path, alg, CONFIG)
+            self.assertEqual(alg.await_count, 1)  # x came from the journal
+            self.assertEqual(set(cached_rows(path)), {"x", "y"})
+            self.assertFalse(Path(path + ".partial").exists())
+
     async def test_score_cache_invalidated_by_partition_and_patience(self):
         row = {"id": "a", "prompt": "p", "generations": ["a", "b"], "partition": [0, 1]}
-        with (
-            tempfile.TemporaryDirectory() as directory,
-            patch.object(
-                score, "score_partition_rm", AsyncMock(return_value=([5, 10], [5, 10]))
-            ) as rm,
-        ):
+        scorer = AsyncMock(return_value=[5, 10])
+        with tempfile.TemporaryDirectory() as directory:
             path = str(Path(directory) / "scores.jsonl")
-            await score.process_instances([row], path, 0.8)
-            await score.process_instances([row], path, 0.8)
-            self.assertEqual(rm.await_count, 1)
-            rm.return_value = ([5, 0], [5])
-            await score.process_instances([dict(row, partition=[0, 0])], path, 0.8)
-            self.assertEqual(cached_rows(path)["a"]["generation_scores"], [5, 0])
-            rm.return_value = ([5, 10], [5, 10])
-            await score.process_instances([row], path, 0)
+            await score.process_instances([row], path, scorer, CONFIG, 0.8)
+            await score.process_instances([row], path, scorer, CONFIG, 0.8)
+            self.assertEqual(scorer.await_count, 1)
+            await score.process_instances(
+                [dict(row, partition=[0, 0])], path, scorer, CONFIG, 0.8
+            )
+            self.assertEqual(cached_rows(path)["a"]["generation_scores"], [5, 10])
+            self.assertEqual(cached_rows(path)["a"]["partition_scores"], [5])
+            await score.process_instances([row], path, scorer, CONFIG, 0)
             self.assertEqual(cached_rows(path)["a"]["utility"], 5)
-            self.assertEqual(rm.await_count, 3)
+            self.assertEqual(scorer.await_count, 3)
 
     async def test_legacy_cache_does_not_skip_new_evaluation(self):
         row = {"id": "a", "prompt": "p", "generations": ["a"], "partition": [0]}
-        with (
-            tempfile.TemporaryDirectory() as directory,
-            patch.object(
-                score, "score_partition_rm", AsyncMock(return_value=([5], [5]))
-            ) as rm,
-        ):
+        scorer = AsyncMock(return_value=[5])
+        with tempfile.TemporaryDirectory() as directory:
             path = str(Path(directory) / "scores.jsonl")
             write_rows(path, [dict(row, utility=10)])
-            await score.process_instances([row], path, 0.8)
-            self.assertEqual(rm.await_count, 1)
+            await score.process_instances([row], path, scorer, CONFIG, 0.8)
+            self.assertEqual(scorer.await_count, 1)
             self.assertEqual(cached_rows(path)["a"]["utility"], 5)
+
+    async def test_llm_scores_cap_invalid_responses(self):
+        out = score.Scores(
+            items=[
+                score.Verdict(valid=True, score=9),
+                score.Verdict(valid=False, score=8),
+            ]
+        )
+        with patch.object(score, "judge", AsyncMock(return_value=out)):
+            self.assertEqual(await score.score_llm("p", ["a", "b"], "m"), [9, 3])

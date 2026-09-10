@@ -28,7 +28,7 @@ uv sync
 2. **Partition**: Group semantically similar responses
 
    ```shell
-   python src/partition.py --eval-dir results/curated/gpt4o --alg classifier
+   python src/partition.py --eval-dir results/curated/gpt4o --concurrency 32
    ```
 
 3. **Score**: Evaluate the quality of responses
@@ -42,6 +42,21 @@ uv sync
    ```shell
    python src/summarize.py --eval-dir results/curated/gpt4o
    ```
+
+Steps 2-4 take `--version` (default `1.1`) and read/write
+`<eval-dir>/v<version>/{partitions,scores}.jsonl` and `summary.json`, so one
+`eval-dir` can hold results under several metric versions.
+
+### Metric versions
+
+| version | partition | utility |
+|---|---|---|
+| 1.0 | `classifier`: pairwise DeBERTa similarity classifier, each response compared to the head of each existing class (128-token window, see below) | Skywork-Reward-Gemma-2-27B reward model |
+| 1.1 | `llm`: one `gpt-5.6-luna` call per prompt sees all responses in full and returns the groups (`JUDGE_SYSTEM` in `src/partition.py`; `--judge-model` to change) | same as 1.0 (revision pending) |
+
+`--alg` overrides the version's default partition algorithm; `--seed` shuffles
+the order responses are shown to the judge, for stability checks. The `llm`
+algorithm needs `OPENAI_API_KEY` (or `ANTHROPIC_API_KEY` for Claude judges).
 
 ### Note on classifier input length
 
@@ -153,20 +168,22 @@ If you are interested in submitting your model to the NoveltyBench Leaderboard, 
   - Follow the instruction in the Basic Workflow section to get the following files for each subset _NB-Curated_ and _NB-WildChat_:
     ```
     - generations.jsonl
-    - partitions.jsonl
-    - scores.jsonl
-    - summary.json
+    - v1.1/partitions.jsonl
+    - v1.1/scores.jsonl
+    - v1.1/summary.json
     ```
   - Put your **scores.jsonl** and **summary.json** under the folder. You final folder should look like:
     ```
     - evaluation/
       - <date + name>/
         - nb-curated/
-          - scores.jsonl
-          - summary.json
+          - v1.1/
+            - scores.jsonl
+            - summary.json
         - nb-wildchat/
-          - scores.jsonl
-          - summary.json
+          - v1.1/
+            - scores.jsonl
+            - summary.json
     ```
 5. Create a pull request to this repository with the new folder.
 6. (Optional) To get attribution on the leaderboard, include in your PR description:

@@ -5,9 +5,11 @@ import os
 import numpy as np
 import pandas as pd
 
+from src.common import DEFAULT_VERSION, METRIC_VERSIONS, version_dir
 
-def summarize(df: pd.DataFrame) -> dict:
-    summary = {}
+
+def summarize(df: pd.DataFrame, version: str) -> dict:
+    summary = {"version": version}
 
     summary["mean_distinct"] = np.mean(df["partition_scores"].map(len))
     summary["mean_utility"] = np.mean(df["utility"])
@@ -20,11 +22,12 @@ def main():
     parser.add_argument(
         "--eval-dir", help="Directory containing evaluation files", required=True
     )
+    parser.add_argument("--version", default=DEFAULT_VERSION, choices=METRIC_VERSIONS)
     args = parser.parse_args()
 
-    eval_dir = args.eval_dir
+    eval_dir = version_dir(args.eval_dir, args.version)
     df = pd.read_json(os.path.join(eval_dir, "scores.jsonl"), lines=True)
-    summary = summarize(df)
+    summary = summarize(df, args.version)
     with open(os.path.join(eval_dir, "summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 
