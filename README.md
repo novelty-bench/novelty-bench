@@ -209,11 +209,12 @@ of becoming novelty or empty answers; existing output is preserved on failure.
 The short-answer word-overlap shortcut has been removed, so new classifier runs
 can differ from published partitions on short answers.
 
-The utility formula and published evaluation files are unchanged. Four historical
-summaries (Gemini and CrPO, both splits) used the old `distinct` field and are
-exactly 1 below the actual class-count mean. The current summarizer already counts
-classes correctly. Tests cover all eight summaries and 4,400 saved score rows,
-including these known historical offsets.
+The utility formula is unchanged. A one-time correction updates `distinct` in
+historical evaluation rows to the actual class count. Four historical summaries
+(Gemini and CrPO, both splits) also increase `mean_distinct` by exactly 1;
+the other four summaries already used the correct count. Partitions, response
+scores, and utility values are unchanged. Tests verify the corrected counts and
+all eight summaries against 4,400 saved score rows.
 
 Vertex providers accept `--project` (or `GOOGLE_CLOUD_PROJECT`) and `--region`.
 OpenAI accepts `OPENAI_API_KEY` when no local `openai-api-key` file is present.
