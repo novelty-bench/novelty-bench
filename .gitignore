@@ -185,3 +185,10 @@ slurm_output/
 *.tar.gz
 .vscode/
 models/
+# Evaluation data: git keeps the metric, the dataset repo keeps the corpus.
+# Response text for the 1,000 WildChat prompts and the batch working files are
+# published with src/publish.py instead of committed here.
+evaluation/*/nb-wildchat/generations.jsonl
+evaluation/**/batch.*.json
+evaluation/**/batch.*.jsonl
+evaluation/**/*.jsonl.partial
