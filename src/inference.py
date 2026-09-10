@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import json
 import os
 import time
 from abc import ABC, abstractmethod
@@ -30,6 +31,16 @@ class InferenceService(ABC):
 
 REFUSED = "[refused]"  # provider-side refusal; placeholders keep the row valid
 EMPTY = "[empty]"  # the model spent its whole token budget without answering
+
+
+def log_usage(model: str, usage) -> None:
+    """Append one line of token usage to $NB_USAGE_LOG, if set (no extra API calls)."""
+    path = os.environ.get("NB_USAGE_LOG")
+    if path and usage is not None:
+        with open(path, "a") as f:
+            f.write(
+                json.dumps({"model": model, **usage.model_dump(exclude_none=True)}) + "\n"
+            )
 
 
 def openai_params(
@@ -107,6 +118,8 @@ class OpenAIService(InferenceService):
             resps = await asyncio.gather(
                 *(self.client.chat.completions.create(**body) for _ in range(n))
             )
+            for r in resps:
+                log_usage(model, r.usage)
             return [openai_text(r) for r in resps]
         resp = await self.client.chat.completions.create(n=n, **body)
         return [c.message.content for c in resp.choices]
@@ -195,7 +208,9 @@ class AnthropicService(InferenceService):
 
     async def create(self, body) -> str:
         try:
-            return anthropic_text(await self.client.messages.create(**body))
+            msg = await self.client.messages.create(**body)
+            log_usage(body["model"], msg.usage)
+            return anthropic_text(msg)
         except BadRequestError as e:  # output-side content filter is a 400, not a refusal
             if "content filtering" in str(e):
                 return REFUSED
