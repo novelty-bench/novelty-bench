@@ -73,7 +73,7 @@ class OpenAIBatchTests(unittest.IsolatedAsyncioTestCase):
             lines = [json.loads(line) for line in uploaded["body"].decode().splitlines()]
             self.assertEqual([x["custom_id"] for x in lines], ["c0", "c1", "c2", "c3"])
             self.assertEqual(lines[0]["body"]["reasoning_effort"], "low")
-            self.assertEqual(lines[0]["body"]["max_completion_tokens"], 2048)
+            self.assertEqual(lines[0]["body"]["max_completion_tokens"], 4096)
             self.assertNotIn("temperature", lines[0]["body"])
 
             live = AsyncMock(return_value=["b0 live"])
@@ -131,6 +131,16 @@ class ParamTests(unittest.TestCase):
             stop_reason="end_turn", content=[SimpleNamespace(type="text", text="ok")]
         )
         self.assertEqual(inference.anthropic_text(msg), "ok")
+
+    def test_exhausted_budget_is_a_placeholder(self):
+        choice = SimpleNamespace(
+            finish_reason="length", message=SimpleNamespace(content=None, refusal=None)
+        )
+        self.assertEqual(
+            inference.openai_text(SimpleNamespace(choices=[choice])), inference.EMPTY
+        )
+        msg = SimpleNamespace(stop_reason="max_tokens", content=[])
+        self.assertEqual(inference.anthropic_text(msg), inference.EMPTY)
 
     def test_openai_params_without_reasoning_keep_sampling(self):
         body = inference.openai_params(

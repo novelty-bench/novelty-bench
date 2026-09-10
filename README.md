@@ -88,9 +88,11 @@ best interpreted as a judgement about the opening of each response.
 ### Adding a model (v1.1 protocol)
 
 Generation protocol for v1.1 submissions: 10 generations per prompt,
-`--max-tokens 2048` (visible output; thinking is budgeted separately), reasoning
-models at `--reasoning-effort low` with sampling parameters unset, other models at
-temperature 1.0. Submissions made before v1.1 were generated at `max_tokens 512`,
+`--max-tokens 2048`, reasoning models at `--reasoning-effort low` with sampling
+parameters unset, other models at temperature 1.0. Reasoning models get a
+4096-token budget shared with their reasoning; a response whose budget ran out
+before any visible text is recorded as `[empty]`, and a provider refusal as
+`[refused]`, so every row keeps 10 generations. Submissions made before v1.1 were generated at `max_tokens 512`,
 which truncated 20–55% of responses for most models. Two sampling modes are
 reported: `regenerate` (independent samples) and `in-context` (each sample is
 asked for in the same conversation after the previous ones).

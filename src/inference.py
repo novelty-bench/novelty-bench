@@ -15,7 +15,7 @@ from openai import AsyncOpenAI
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from src.common import google_project, oai_client
-from src.evaluation_io import cached_rows, evaluation_key, write_rows
+from src.evaluation_io import run_cached
 
 
 class InferenceService(ABC):
@@ -28,7 +28,8 @@ class InferenceService(ABC):
         print("Done!")
 
 
-REFUSED = "[refused]"  # placeholder for a provider-side refusal, so the row stays valid
+REFUSED = "[refused]"  # provider-side refusal; placeholders keep the row valid
+EMPTY = "[empty]"  # the model spent its whole token budget without answering
 
 
 def openai_params(
@@ -36,9 +37,9 @@ def openai_params(
 ):
     """Chat-completions body; reasoning models take an effort and no temperature."""
     body = {"model": model, "messages": messages}
-    if reasoning_effort:
+    if reasoning_effort:  # the budget is shared with reasoning, so double it
         body |= {
-            "max_completion_tokens": max_tokens,
+            "max_completion_tokens": 2 * max_tokens,
             "reasoning_effort": reasoning_effort,
         }
     else:
@@ -48,9 +49,12 @@ def openai_params(
 
 def openai_text(completion) -> str:
     choice = completion.choices[0]
-    if choice.finish_reason == "content_filter":
+    if choice.finish_reason == "content_filter" or choice.message.refusal:
         return REFUSED
-    return choice.message.content or ""
+    text = choice.message.content or ""
+    if not text.strip() and choice.finish_reason == "length":
+        return EMPTY
+    return text
 
 
 def anthropic_params(
@@ -85,7 +89,10 @@ def anthropic_params(
 def anthropic_text(message) -> str:
     if message.stop_reason == "refusal":
         return REFUSED
-    return "".join(block.text for block in message.content if block.type == "text")
+    text = "".join(block.text for block in message.content if block.type == "text")
+    if not text.strip() and message.stop_reason == "max_tokens":
+        return EMPTY
+    return text
 
 
 class OpenAIService(InferenceService):
@@ -426,7 +433,7 @@ async def run_generation(
             # Exponential backoff
             wait_time = min(5 * 2**attempt, 60)  # 5, 10, 20, 40, 60, 60, ... seconds
             print(
-                f"Attempt {attempt + 1} failed, retrying in {wait_time} seconds...",
+                f"Attempt {attempt + 1} failed ({e!r:.200}), retrying in {wait_time} seconds...",
                 flush=True,
             )
             await asyncio.sleep(wait_time)
@@ -473,7 +480,6 @@ async def process_prompts(
     if num_generations < 1 or concurrent_requests < 1:
         raise ValueError("Generation count and concurrency must be positive")
     prompts = list(prompts)
-    existing = cached_rows(output_file)
     config = generation_config(
         model,
         mode or type(service).__name__,
@@ -486,35 +492,23 @@ async def process_prompts(
     gen_kwargs = {"max_tokens": max_tokens, "temperature": temperature}
     if reasoning_effort:
         gen_kwargs["reasoning_effort"] = reasoning_effort
-    semaphore = asyncio.Semaphore(concurrent_requests)
 
-    async def process_single_prompt(prompt):
-        key = evaluation_key(prompt, config)
-        cached = existing.get(prompt["id"], {})
-        if cached.get("generation_key") == key:
-            validate_generations(cached["generations"], num_generations)
-            return {**prompt, **cached}
-        async with semaphore:
-            generations = await run_generation(
-                service,
-                model,
-                prompt["prompt"],
-                prompt.get("prompt_paraphrases"),
-                num_generations,
-                sampling,
-                **gen_kwargs,
-            )
+    async def compute(prompt):
+        generations = await run_generation(
+            service,
+            model,
+            prompt["prompt"],
+            prompt.get("prompt_paraphrases"),
+            num_generations,
+            sampling,
+            **gen_kwargs,
+        )
         validate_generations(generations, num_generations)
-        return {
-            **prompt,
-            "model": model,
-            "generations": generations,
-            "generation_key": key,
-            "generation_config": config,
-        }
+        return {"model": model, "generations": generations}
 
-    results = await asyncio.gather(*(process_single_prompt(prompt) for prompt in prompts))
-    write_rows(output_file, results)
+    await run_cached(
+        prompts, output_file, "generation_key", config, compute, concurrent_requests
+    )
 
 
 async def main():
