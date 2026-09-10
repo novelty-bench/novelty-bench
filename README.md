@@ -52,14 +52,30 @@ Steps 2-4 take `--version` (default `1.1`) and read/write
 | version | partition | utility |
 |---|---|---|
 | 1.0 | `classifier`: pairwise DeBERTa similarity classifier, each response compared to the head of each existing class (128-token window, see below) | Skywork-Reward-Gemma-2-27B reward model |
-| 1.1 | `llm`: one `claude-opus-5` call per prompt sees all responses in full and returns the groups (`JUDGE_SYSTEM` in `src/partition.py`) | `llm`: `claude-opus-5` scores each response on its own, 1-10, by how well it serves what the prompt asked for (`SCORE_SYSTEM` in `src/score.py`); the first response of each class is credited |
+| 1.1 | `llm`: one `gpt-5.6-luna` call per prompt sees all responses in full and returns the groups (`JUDGE_SYSTEM` in `src/partition.py`) | `llm`: `claude-opus-5` scores the first response of each class on its own, 1-10, by how well it serves what the prompt asked for (`SCORE_SYSTEM` in `src/score.py`); duplicates are left unscored |
 
 `--alg` / `--scorer` override a version's defaults and `--judge-model` the judge
 (`claude-*` needs `ANTHROPIC_API_KEY`, `gpt-*` needs `OPENAI_API_KEY`); `--seed`
 shuffles the order responses are shown to the partition judge, for stability
-checks. Every generation gets a score, so partitions and scores can be revised
-independently; results are cached by content and config, and an interrupted run
+checks. Results are cached by content and config, and an interrupted run
 resumes from `<file>.partial`.
+
+**v1.1 in short.** The v1.0 partition classifier saw only the first 128 tokens
+of each response and compared each response to one class head, so it merged
+different stories and split near-identical ones; the v1.0 reward model scored
+typicality rather than quality and read a focused but unusual answer as a bad
+one. v1.1 replaces both with LLM judges whose prompts are the metric definition:
+a response is *distinct* if a reader of another response would still gain
+something from it, and its *utility* is how well it serves what the prompt asked
+for — one thing asked for is best served by one thing, elaboration beyond the
+ask earns nothing, and craft counts where the prompt calls for it. On a 60-instance
+sample, judge partitions agreed with each other at ARI 0.9–0.97 and were
+order-stable (ARI 0.92–0.95 across shuffles), against 0.3–0.8 for the
+classifier; utility judges agreed at Spearman 0.83 (Opus vs Sol) and ~0.55 with
+the reward model. The generation protocol also changed for new submissions:
+`max_tokens` 2048 (v1.0 used 512, which truncated 20–55% of most models'
+wildchat responses), reasoning effort low, and no sampling parameters on models
+that reject them. v1.0 numbers remain on the leaderboard under their own tab.
 
 For large runs, `src/batch.py` sends a stage through the Anthropic Batches API
 at half price: `python src/batch.py submit --stage partition --eval-dir ...`,
