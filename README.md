@@ -69,9 +69,11 @@ a response is *distinct* if a reader of another response would still gain
 something from it, and its *utility* is how well it serves what the prompt asked
 for — one thing asked for is best served by one thing, elaboration beyond the
 ask earns nothing, and craft counts where the prompt calls for it. On a 60-instance
-sample, judge partitions agreed with each other at ARI 0.9–0.97 and were
-order-stable (ARI 0.92–0.95 across shuffles), against 0.3–0.8 for the
-classifier; utility judges agreed at Spearman 0.83 (Opus vs Sol) and ~0.55 with
+sample, judge partitions agreed with each other at ARI 0.9–0.97, against
+0.3–0.8 for the classifier; re-partitioning every leaderboard model's curated
+set with the responses shown in a different order reproduced the shipped
+partition at mean ARI 0.89 (0.79–0.95), moving no model's distinct count by
+more than 0.26; utility judges agreed at Spearman 0.83 (Opus vs Sol) and ~0.55 with
 the reward model. The generation protocol also changed for new submissions:
 `max_tokens` 2048 (v1.0 used 512, which truncated 20–55% of most models'
 wildchat responses), reasoning effort low, and no sampling parameters on models
