@@ -117,4 +117,5 @@ async def run_stage(
             return stage.fold(instance, outputs, config)
         except ValueError as e:
             print(f"{stage.name}: invalid judge output (attempt {attempt}): {e}")
-    raise ValueError(f"{stage.name}: no valid judge output for {instance['id']}")
+    # a persistently malformed answer is folded leniently rather than lost
+    return stage.fold(instance, outputs, config | {"lenient": True})

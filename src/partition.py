@@ -209,7 +209,15 @@ def partition_fold(instance: dict, outputs: list, config: dict) -> dict:
     order = shuffled_order(instance["prompt"], n, config.get("seed"))
     groups = outputs[0].groups
     if sorted(i for g in groups for i in g) != list(range(n)):
-        raise ValueError(f"not a partition of {n} responses: {groups}")
+        if not config.get("lenient"):
+            raise ValueError(f"not a partition of {n} responses: {groups}")
+        # last resort: a response the judge left out stands alone, a repeated one
+        # keeps its first group
+        seen: set[int] = set()
+        groups = [
+            [i for i in g if 0 <= i < n and not (i in seen or seen.add(i))]
+            for g in groups
+        ] + [[i] for i in range(n) if i not in seen]
     partition = [0] * n
     for g, members in enumerate(groups):
         for shown in members:
@@ -295,13 +303,24 @@ async def main():
         )
         config |= {"judge_model": args.judge_model, "seed": args.seed}
 
+    failed = []
     for eval_dir in args.eval_dir:
         output_file = os.path.join(
             version_dir(eval_dir, args.version), "partitions.jsonl"
         )
-        await process_instances(
-            load_instances(eval_dir), output_file, partition_alg, config, args.concurrency
-        )
+        try:
+            await process_instances(
+                load_instances(eval_dir),
+                output_file,
+                partition_alg,
+                config,
+                args.concurrency,
+            )
+        except RuntimeError as e:  # keep going; the journal holds this dir's progress
+            print(e)
+            failed.append(eval_dir)
+    if failed:
+        raise SystemExit(f"{len(failed)} eval dirs incomplete: {' '.join(failed)}")
 
 
 if __name__ == "__main__":

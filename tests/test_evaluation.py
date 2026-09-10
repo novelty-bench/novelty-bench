@@ -64,6 +64,13 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(got, [0, 1, 0, 1])
 
+    async def test_persistently_invalid_partition_is_folded_leniently(self):
+        bad = partition.Partition(groups=[[0, 1], [0]])  # drops 2, repeats 0
+        with patch.object(judge_module, "judge", AsyncMock(return_value=bad)) as j:
+            got = await partition.partition_llm("p", ["a", "b", "c"], "m")
+        self.assertEqual(j.await_count, 3)
+        self.assertEqual(got, [0, 0, 1])
+
     async def test_llm_partition_unshuffles_and_retries_invalid(self):
         outputs = [
             partition.Partition(groups=[[0, 1]]),  # drops index 2: invalid
