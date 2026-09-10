@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from src.common import DEFAULT_JUDGE, DEFAULT_VERSION, METRIC_VERSIONS, version_dir
 from src.evaluation_io import run_cached
-from src.judge import Call, Stage, judge
+from src.judge import DEFAULT_EFFORT, Call, Stage, judge_call
 
 reward_thresholds = [
     -7.71875,
@@ -142,9 +142,14 @@ def score_refused(instance: dict) -> dict:
 STAGE = Stage("score", "score_key", score_calls, score_fold, score_refused)
 
 
-async def score_llm(instance, model) -> list[int | None]:
-    outputs = await asyncio.gather(*(judge(model, c) for c in score_calls(instance, {})))
-    return spread(instance, outputs)
+async def score_llm(instance, model, fallback=None) -> list[int | None]:
+    pairs = await asyncio.gather(
+        *(
+            judge_call(model, c, DEFAULT_EFFORT, fallback)
+            for c in score_calls(instance, {})
+        )
+    )
+    return spread(instance, [output for output, _ in pairs])
 
 
 SCORERS = {
@@ -199,6 +204,11 @@ async def main():
     parser.add_argument("--judge-model", default=DEFAULT_JUDGE)
     parser.add_argument("--concurrency", type=int, default=1, help="instances in flight")
     parser.add_argument(
+        "--fallback-judge",
+        default="claude-sonnet-5",
+        help="scores the responses the main judge declines; not part of the cache key",
+    )
+    parser.add_argument(
         "--patience",
         help="Discount factor for computing cumulative utility.",
         type=float,
@@ -210,7 +220,9 @@ async def main():
     scorer = SCORERS[name]
     config = {"stage": "score", "version": args.version, "scorer": name}
     if name == "llm":
-        scorer = functools.partial(scorer, model=args.judge_model)
+        scorer = functools.partial(
+            scorer, model=args.judge_model, fallback=args.fallback_judge
+        )
         config |= {"judge_model": args.judge_model}
 
     for eval_dir in args.eval_dir:

@@ -146,6 +146,26 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(scorer.await_count, 1)
             self.assertEqual(cached_rows(path)["a"]["utility"], 5)
 
+    async def test_refused_call_is_rescored_by_the_fallback_judge(self):
+        from src.judge import JudgeRefusal, run_stage
+
+        async def fake_judge(model, call, effort=None):
+            if model == "main":
+                raise JudgeRefusal("declined")
+            return score.Score(score=4)
+
+        inst = {"id": "a", "prompt": "p", "generations": ["x"], "partition": [0]}
+        with patch.object(judge_module, "judge", fake_judge):
+            fields = await run_stage(
+                score.STAGE,
+                inst,
+                {"judge_model": "main", "patience": 0.8},
+                fallback="backup",
+            )
+        self.assertEqual(fields["generation_scores"], [4])
+        self.assertEqual(fields["fallback_judge"], "backup")
+        self.assertEqual(fields["fallback_calls"], [0])
+
     async def test_judge_refusal_is_recorded_as_unscored(self):
         from src.judge import JudgeRefusal, run_stage
 
@@ -181,7 +201,7 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
             return next(outs)
 
         inst = {"prompt": "p", "generations": ["a", "b", "c"], "partition": [0, 0, 1]}
-        with patch.object(score, "judge", fake_judge):
+        with patch.object(judge_module, "judge", fake_judge):
             got = await score.score_llm(inst, "m")
         self.assertEqual(got, [9, None, 3])
         fields = score.utility_fields(got, inst["partition"], 0.8)

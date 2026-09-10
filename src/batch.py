@@ -19,13 +19,7 @@ from anthropic.types.messages.batch_create_params import Request
 from src import partition, score
 from src.common import DEFAULT_JUDGE, DEFAULT_VERSION, METRIC_VERSIONS, version_dir
 from src.evaluation_io import finalize, plan, stamp
-from src.judge import (
-    DEFAULT_EFFORT,
-    JudgeRefusal,
-    anthropic_params,
-    parse_message,
-    run_stage,
-)
+from src.judge import DEFAULT_EFFORT, anthropic_params, parse_message, run_stage
 
 STAGES = {"partition": partition.STAGE, "score": score.STAGE}
 
@@ -74,7 +68,7 @@ def status(client, vdir, stage_name):
     print(f"{vdir}: {batch.processing_status} {batch.request_counts}")
 
 
-async def collect(client, stage, eval_dir, vdir):
+async def collect(client, stage, eval_dir, vdir, fallback=None):
     path = manifest_path(vdir, stage.name)
     if not os.path.exists(path):
         return
@@ -107,12 +101,8 @@ async def collect(client, stage, eval_dir, vdir):
                     parse_message(raw[x["id"]][k], c.schema) for k, c in enumerate(calls)
                 ]
                 fields = stage.fold(x, outputs, config)
-            except JudgeRefusal:
-                if stage.on_refusal is None:
-                    raise
-                print(f"{x['id']}: judge declined; recorded unscored")
-                fields = stage.on_refusal(x)
             except (KeyError, ValueError) as e:
+                # a refusal included: re-judged live, where the fallback judge applies
                 print(f"{x['id']}: {e!r}; re-judging live")
                 retry.append(x)
                 continue
@@ -123,7 +113,8 @@ async def collect(client, stage, eval_dir, vdir):
         for x, result in zip(
             retry,
             await asyncio.gather(
-                *(run_stage(stage, x, config) for x in retry), return_exceptions=True
+                *(run_stage(stage, x, config, fallback=fallback) for x in retry),
+                return_exceptions=True,
             ),
             strict=True,
         ):
@@ -156,6 +147,11 @@ async def main():
     parser.add_argument("--effort", default=DEFAULT_EFFORT)
     parser.add_argument("--seed", type=int, help="partition: shuffle response order")
     parser.add_argument("--patience", type=float, default=0.8)
+    parser.add_argument(
+        "--fallback-judge",
+        default="claude-sonnet-5",
+        help="scores the responses the main judge declines; not part of the cache key",
+    )
     args = parser.parse_args()
 
     stage = STAGES[args.stage]
@@ -179,7 +175,7 @@ async def main():
             case "status":
                 status(client, vdir, stage.name)
             case "collect":
-                await collect(client, stage, eval_dir, vdir)
+                await collect(client, stage, eval_dir, vdir, args.fallback_judge)
 
 
 if __name__ == "__main__":

@@ -113,24 +113,55 @@ async def judge(model: str, call: Call, effort: str = DEFAULT_EFFORT):
     return parsed
 
 
+async def judge_call(model: str, call: Call, effort: str, fallback: str | None = None):
+    """One call, with a second judge for the answers this one declines.
+
+    A refusal is deterministic and specific to the response being judged (a
+    safety classifier firing on its content), so retrying the same model is
+    pointless; another model usually answers. Returns (output, model used).
+    """
+    try:
+        return await judge(model, call, effort), model
+    except JudgeRefusal:
+        if not fallback:
+            raise
+        return await judge(fallback, call, effort), fallback
+
+
 async def run_stage(
-    stage: Stage, instance: dict, config: dict, attempts: int = 3
+    stage: Stage,
+    instance: dict,
+    config: dict,
+    attempts: int = 3,
+    fallback: str | None = None,
 ) -> dict:
-    """Judge one instance live: all its calls concurrently, then fold; retried on invalid output."""
+    """Judge one instance live: all its calls concurrently, then fold; retried on invalid output.
+
+    `fallback` is error recovery, not a metric setting, so it stays out of
+    `config` and therefore out of the cache key; a row it touched says so.
+    """
     model, effort = config["judge_model"], config.get("effort", DEFAULT_EFFORT)
     for attempt in range(attempts):
+        calls = stage.calls(instance, config)
         try:
-            outputs = await asyncio.gather(
-                *(judge(model, c, effort) for c in stage.calls(instance, config))
+            pairs = await asyncio.gather(
+                *(judge_call(model, c, effort, fallback) for c in calls)
             )
         except JudgeRefusal:
             if stage.on_refusal is None:
                 raise
-            print(f"{stage.name}: judge declined {instance['id']}; recorded unscored")
+            print(f"{stage.name}: every judge declined {instance['id']}; unscored")
             return stage.on_refusal(instance)
+        outputs = [output for output, _ in pairs]
+        declined = [i for i, (_, used) in enumerate(pairs) if used != model]
         try:
-            return stage.fold(instance, outputs, config)
+            fields = stage.fold(instance, outputs, config)
         except ValueError as e:
             print(f"{stage.name}: invalid judge output (attempt {attempt}): {e}")
+            continue
+        if declined:
+            print(f"{stage.name}: {instance['id']} calls {declined} scored by {fallback}")
+            fields |= {"fallback_judge": fallback, "fallback_calls": declined}
+        return fields
     # a persistently malformed answer is folded leniently rather than lost
     return stage.fold(instance, outputs, config | {"lenient": True})
