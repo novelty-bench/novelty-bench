@@ -4,16 +4,41 @@ See [project webpage](https://novelty-bench.github.io/) for the dataset, evaluat
 
 ## Installation
 
-via pip:
-```shell
-# Install dependencies
-pip install -e .
-```
+Python 3.11 or newer.
 
 via uv:
 ```shell
 uv sync
 ```
+
+via pip:
+```shell
+pip install -e .
+```
+
+Run every stage as a module — `python -m src.partition`, not
+`python src/partition.py`. The scripts import each other through the `src`
+package, and the module form resolves that against the directory you are
+standing in; the script form resolves it against wherever the package happens
+to be installed, which silently runs the wrong copy if you have more than one
+checkout.
+
+### API keys
+
+Partitioning and scoring in v1.1 call hosted judges, and most inference
+providers are hosted too. Export whichever you need:
+
+```shell
+export ANTHROPIC_API_KEY=...   # claude-* judges and inference
+export OPENAI_API_KEY=...      # gpt-* judges and inference
+```
+
+`OPENAI_API_KEY` can instead live in a file named `openai-api-key` in the
+repository root. Other providers read `cohere-api-key`, `gemini-api-key`,
+`together-api-key` or `openrouter-api-key` from the root the same way; Vertex
+providers use application-default credentials plus `--project` / `--region`.
+Nothing in the pipeline needs a key until it makes its first call, so
+`--limit 2` is a cheap way to check a provider is wired up.
 
 ## Usage
 
@@ -22,30 +47,56 @@ uv sync
 1. **Inference**: Generate multiple responses from language models
 
    ```shell
-   python src/inference.py --mode openai --model gpt-4o --data curated --eval-dir results/curated/gpt4o --num-generations 10
+   python -m src.inference --mode openai --model gpt-5.6-luna --data curated \
+     --eval-dir results/curated/luna --num-generations 10 \
+     --max-tokens 2048 --reasoning-effort low
    ```
 
-2. **Partition**: Group semantically similar responses
+2. **Partition**: Group responses that say the same thing
 
    ```shell
-   python src/partition.py --eval-dir results/curated/gpt4o --concurrency 32
+   python -m src.partition --eval-dir results/curated/luna --concurrency 32
    ```
 
-3. **Score**: Evaluate the quality of responses
+3. **Score**: Judge one response per distinct answer
 
    ```shell
-   python src/score.py --eval-dir results/curated/gpt4o --patience 0.8
+   python -m src.score --eval-dir results/curated/luna --concurrency 16 --patience 0.8
    ```
 
-4. **Summarize**: Analyze and visualize results
+4. **Summarize**: Reduce to `mean_distinct` and `mean_utility`
 
    ```shell
-   python src/summarize.py --eval-dir results/curated/gpt4o
+   python -m src.summarize --eval-dir results/curated/luna
    ```
 
 Steps 2-4 take `--version` (default `1.1`) and read/write
 `<eval-dir>/v<version>/{partitions,scores}.jsonl` and `summary.json`, so one
-`eval-dir` can hold results under several metric versions.
+`eval-dir` can hold results under several metric versions:
+
+```
+results/curated/luna/
+  generations.jsonl        # inference output, shared by every version
+  v1.0/                    # partitions.jsonl, scores.jsonl, summary.json
+  v1.1/                    # partitions.jsonl, scores.jsonl, summary.json
+```
+
+Submissions made before v1.1 have their v1.0 files at the top level rather than
+under `v1.0/`; both layouts are read.
+
+### Resuming and caching
+
+Every stage is resumable and safe to re-run. Each output row carries a
+`*_key` hash of its inputs and a `*_config` record of the settings that
+produced it (`generation_key`, `partition_key`, `score_key`), so a re-run
+recomputes only the rows whose prompt, responses, partition or configuration
+actually changed, and leaves the rest untouched. Change the judge model or the
+patience and the affected stage recomputes; change nothing and it is a no-op.
+
+While a stage runs, finished rows are appended to `<file>.partial`; the real
+output file is replaced atomically only once every row is in. An interrupted
+run therefore costs nothing — start the same command again and it picks up from
+the journal. The journal is removed when the stage completes.
 
 ### Metric versions
 
@@ -107,13 +158,13 @@ best interpreted as a judgement about the opening of each response.
 
 Generation protocol for v1.1 submissions: 10 generations per prompt,
 `--max-tokens 2048`, reasoning models at `--reasoning-effort low` with sampling
-parameters unset, other models at temperature 1.0. Reasoning models get a
-4096-token budget shared with their reasoning; a response whose budget ran out
-before any visible text is recorded as `[empty]`, and a provider refusal as
-`[refused]`, so every row keeps 10 generations. Submissions made before v1.1 were generated at `max_tokens 512`,
-which truncated 20–55% of responses for most models. Two sampling modes are
-reported: `regenerate` (independent samples) and `in-context` (each sample is
-asked for in the same conversation after the previous ones).
+parameters unset, other models at temperature 1.0. Report which of two sampling
+modes you used: `regenerate` (independent samples) or `in-context` (each sample
+asked for in the same conversation, after the previous ones).
+
+Note `--max-tokens` defaults to 512 in `src/inference.py`, the pre-v1.1 value,
+so a v1.1 run has to pass it explicitly. `src/batch_generate.py` already
+defaults to 2048.
 
 1. Generate. `regenerate` runs can go through the provider's batch API at half
    price; `in-context` is sequential, so run it live (the Anthropic client puts a
@@ -121,33 +172,77 @@ asked for in the same conversation after the previous ones).
    caches prefixes automatically).
 
    ```shell
-   # regenerate, batched: submit, then poll status, then collect
-   python src/batch_generate.py submit  --model claude-opus-5 --data curated --reasoning-effort low --eval-dir evaluation/<date>_claude-opus-5/nb-curated
-   python src/batch_generate.py collect --model claude-opus-5 --data curated --reasoning-effort low --eval-dir evaluation/<date>_claude-opus-5/nb-curated
+   # regenerate, batched: submit, poll until it ends, then collect
+   python -m src.batch_generate submit  --model claude-opus-5 --data curated --reasoning-effort low --eval-dir evaluation/<date>_claude-opus-5/nb-curated
+   python -m src.batch_generate status  --model claude-opus-5 --data curated --reasoning-effort low --eval-dir evaluation/<date>_claude-opus-5/nb-curated
+   python -m src.batch_generate collect --model claude-opus-5 --data curated --reasoning-effort low --eval-dir evaluation/<date>_claude-opus-5/nb-curated
    # in-context, live
-   python src/inference.py --mode anthropic --model claude-opus-5 --data curated --sampling in-context --max-tokens 2048 --reasoning-effort low --concurrent-requests 8 --eval-dir evaluation/<date>_claude-opus-5_in-context/nb-curated
+   python -m src.inference --mode anthropic --model claude-opus-5 --data curated --sampling in-context --max-tokens 2048 --reasoning-effort low --concurrent-requests 8 --eval-dir evaluation/<date>_claude-opus-5_in-context/nb-curated
    ```
    `--mode openai` for OpenAI models (`gpt-5.6-*`, `gpt-6-*`); `anthropic` uses the
-   Anthropic API directly, `anthropic-vertex` the Vertex endpoint. Rows carry
-   `generation_config`, so a live run and a batch collect recognise each other's
-   output and an interrupted run resumes.
+   Anthropic API directly, `anthropic-vertex` the Vertex endpoint. `submit`,
+   `status` and `collect` all take the same flags, because the settings are part
+   of the cache key. Add `--limit 2` to any of these for a smoke test.
 
-2. Partition with the v1.1 judge (`gpt-5.6-luna`, set-level, live):
-
-   ```shell
-   python src/partition.py --version 1.1 --judge-model gpt-5.6-luna --concurrency 32 --eval-dir evaluation/<date>_<model>/nb-*
-   ```
-
-3. Score class heads with `claude-opus-5` through the Batches API, then summarise:
+2. Partition with the v1.1 judge (`gpt-5.6-luna`, set-level, live). `--eval-dir`
+   accepts several directories, and a failure in one does not abandon the rest:
 
    ```shell
-   python src/batch.py submit  --stage score --eval-dir evaluation/<date>_<model>/nb-*
-   python src/batch.py collect --stage score --eval-dir evaluation/<date>_<model>/nb-*
-   python src/summarize.py --version 1.1 --eval-dir evaluation/<date>_<model>/nb-curated
+   python -m src.partition --version 1.1 --judge-model gpt-5.6-luna --concurrency 32 \
+     --eval-dir evaluation/<date>_<model>/nb-curated evaluation/<date>_<model>/nb-wildchat
    ```
 
-Repeat for `nb-wildchat`. Submit `generations.jsonl` and `v1.1/{partitions,scores}.jsonl`
-plus `v1.1/summary.json` per split.
+3. Score one response per distinct answer with `claude-opus-5`, then summarise.
+   Live for a single split, or through the Batches API at half price for many:
+
+   ```shell
+   # live
+   python -m src.score --version 1.1 --concurrency 16 --eval-dir evaluation/<date>_<model>/nb-curated
+   # or batched: submit, poll, collect
+   python -m src.batch submit  --stage score --eval-dir evaluation/<date>_<model>/nb-curated evaluation/<date>_<model>/nb-wildchat
+   python -m src.batch status   --stage score --eval-dir evaluation/<date>_<model>/nb-curated evaluation/<date>_<model>/nb-wildchat
+   python -m src.batch collect --stage score --eval-dir evaluation/<date>_<model>/nb-curated evaluation/<date>_<model>/nb-wildchat
+   python -m src.summarize --version 1.1 --eval-dir evaluation/<date>_<model>/nb-curated
+   ```
+
+Submit `generations.jsonl` and `v1.1/{partitions,scores}.jsonl` plus
+`v1.1/summary.json` for each of `nb-curated` and `nb-wildchat`.
+
+### Batch or live
+
+`src/batch.py` runs a judge stage and `src/batch_generate.py` runs generation
+through the Anthropic and OpenAI batch APIs, at half the per-token price. Both
+take `submit`, `status`, `collect`. `collect` writes exactly the files a live
+run writes, through the same cache keys and the same atomic replace, and
+re-judges any request that came back malformed, refused or expired using the
+live API, so a batch run and a live run are interchangeable outputs.
+
+The tradeoff is latency, not accuracy: a batch is promised within 24 hours and
+usually lands sooner, but the queue is outside your control, and submitting many
+large batches at once can leave them all pending for hours. Prefer batch for a
+whole leaderboard, live for one model you want now. `collect` is idempotent —
+re-run it until it reports every instance judged.
+
+### Caveats worth knowing before a run
+
+- **Claude output tokens include thinking.** `max_tokens` bounds visible text
+  plus reasoning together, so a 2048-token visible cap needs a larger budget;
+  the code requests double when `--reasoning-effort` is set.
+- **A reasoning model can return no visible text**, having spent the whole
+  budget thinking. That response is recorded as `[empty]` rather than retried
+  forever, so the row keeps its 10 generations and the judge scores it as the
+  failed answer it is. Count these before reading a model's utility.
+- **A provider refusal is recorded as `[refused]`**, for the same reason.
+- **A judge can decline to score a response.** `--fallback-judge` (default
+  `claude-sonnet-5`) scores whatever the main judge declines, and those rows
+  record `fallback_judge` and which calls it covered. It is error recovery
+  rather than a metric setting, so it is deliberately not part of the cache key.
+  If every judge declines, the row is marked `"unscored": "judge_refusal"`.
+- **Pre-v1.1 submissions were generated at `max_tokens 512`**, which truncated
+  20–55% of most models' WildChat responses mid-sentence. Their v1.0 and v1.1
+  scores both measure those truncated responses; only new runs get 2048.
+- **The v1.0 partition classifier needs a GPU** and downloads a DeBERTa
+  checkpoint. The v1.1 judges need only API keys, so v1.1 reproduces on a laptop.
 
 ### Full Worked Example
 
@@ -172,7 +267,7 @@ uv run vllm serve $MODEL_NAME --port 8000 --served-model-name $MODEL_NAME > vllm
 **Note**: The server takes 1-2 minutes to initialize and load the model.
 
 ```bash
-uv run python src/inference.py \
+uv run python -m src.inference \
   --mode vllm \
   --model $MODEL_NAME \
   --data $SPLIT \
@@ -188,7 +283,7 @@ pkill -f vllm
 #### WITH TRANSFORMERS (slower than VLLM, but more flexible)
 
 ```bash
-uv run python src/inference.py \
+uv run python -m src.inference \
   --mode transformers \
   --model $MODEL_NAME \
   --data $SPLIT \
@@ -197,26 +292,34 @@ uv run python src/inference.py \
   --num-generations 10
 ```
 
-2. **Partition**: Group semantically similar responses
+Local models take no sampling-parameter or reasoning flags, so add
+`--max-tokens 2048` to match the v1.1 protocol.
+
+2. **Partition**: Group responses that say the same thing
 
 ```bash
-uv run python src/partition.py \
+uv run python -m src.partition \
   --eval-dir results/$SPLIT/$MODEL_NAME \
-  --alg classifier
+  --concurrency 32
 ```
 
-3. **Score**: Evaluate the quality of responses
+3. **Score**: Judge one response per distinct answer
 
 ```bash
-uv run python src/score.py \
+uv run python -m src.score \
   --eval-dir results/$SPLIT/$MODEL_NAME \
+  --concurrency 16 \
   --patience 0.8
 ```
 
-4. **Summarize**: Analyze and visualize results
+4. **Summarize**: Reduce to `mean_distinct` and `mean_utility`
 ```bash
-uv run python src/summarize.py --eval-dir results/$SPLIT/$MODEL_NAME
+uv run python -m src.summarize --eval-dir results/$SPLIT/$MODEL_NAME
 ```
+
+To reproduce the original metric instead, pass `--version 1.0` to steps 2-4.
+That selects the DeBERTa classifier and the Skywork reward model, needs a GPU,
+and writes to `v1.0/` rather than `v1.1/`.
 
 
 ## Project Structure
@@ -226,10 +329,16 @@ uv run python src/summarize.py --eval-dir results/$SPLIT/$MODEL_NAME
   - `batch_generate.py`, `batch.py`: Generation and judge stages through the OpenAI / Anthropic batch APIs
   - `judge.py`: Structured-output judge calls shared by live and batch paths
   - `partition.py`: Implements response partitioning algorithms
-  - `score.py`: Scores class heads (LLM judge in v1.1, reward model in v1.0)
+  - `score.py`: Scores one response per distinct answer (LLM judge in v1.1, reward model in v1.0)
   - `summarize.py`: Summarize evaluation results
+  - `evaluation_io.py`: Cache keys, crash journals and atomic output replacement
+  - `common.py`: Metric versions, directory layout and provider clients
 - `data/`: Contains curated and wildchat datasets, human annotations, and classifier training data
 - `evaluation/`: Contains evaluation results for leaderboard participation. We have provided an example submission.
+- `tests/`: Offline regression tests, no network or API keys required:
+  ```shell
+  python -m unittest discover -s tests
+  ```
 
 ## 🏆 Leaderboard Participation
 
@@ -246,19 +355,28 @@ If you are interested in submitting your model to the NoveltyBench Leaderboard, 
     - v1.1/scores.jsonl
     - v1.1/summary.json
     ```
-  - Put your **scores.jsonl** and **summary.json** under the folder. You final folder should look like:
+  - Your final folder should look like:
     ```
     - evaluation/
       - <date + name>/
         - nb-curated/
+          - generations.jsonl
           - v1.1/
+            - partitions.jsonl
             - scores.jsonl
             - summary.json
         - nb-wildchat/
+          - generations.jsonl
           - v1.1/
+            - partitions.jsonl
             - scores.jsonl
             - summary.json
     ```
+  - Generate with the v1.1 protocol described in
+    [Adding a model](#adding-a-model-v11-protocol): 10 responses per prompt at
+    `--max-tokens 2048`, reasoning models at `--reasoning-effort low`. Say in
+    the pull request which sampling mode you used, `regenerate` or
+    `in-context`, and note any `[empty]` or `[refused]` placeholders.
 5. Create a pull request to this repository with the new folder.
 6. (Optional) To get attribution on the leaderboard, include in your PR description:
    ```json
