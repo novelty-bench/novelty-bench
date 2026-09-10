@@ -142,6 +142,35 @@ class ParamTests(unittest.TestCase):
         msg = SimpleNamespace(stop_reason="max_tokens", content=[])
         self.assertEqual(inference.anthropic_text(msg), inference.EMPTY)
 
+    def test_anthropic_batch_content_filter_is_refused(self):
+        errored = SimpleNamespace(
+            custom_id="c0",
+            result=SimpleNamespace(
+                type="errored",
+                error=SimpleNamespace(
+                    error=SimpleNamespace(
+                        message="Output blocked by content filtering policy"
+                    )
+                ),
+            ),
+            model_dump=lambda mode=None: {},
+        )
+        client = SimpleNamespace(
+            messages=SimpleNamespace(
+                batches=SimpleNamespace(
+                    retrieve=lambda bid: SimpleNamespace(processing_status="ended"),
+                    results=lambda bid: iter([errored]),
+                )
+            )
+        )
+        manifest = {"batch_id": "b", "config": {"mode": "anthropic"}, "calls": [["a", 0]]}
+        with (
+            tempfile.TemporaryDirectory() as d,
+            patch.object(batch_generate.anthropic, "Anthropic", return_value=client),
+        ):
+            texts = batch_generate.fetch_results(manifest, str(Path(d) / "raw.jsonl"))
+        self.assertEqual(texts["a"][0], inference.REFUSED)
+
     def test_openai_params_without_reasoning_keep_sampling(self):
         body = inference.openai_params(
             "gpt-4o", [{"role": "user", "content": "hi"}], 512, 1.0

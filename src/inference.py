@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 
 import cohere
 import torch
-from anthropic import AsyncAnthropic, AsyncAnthropicVertex
+from anthropic import AsyncAnthropic, AsyncAnthropicVertex, BadRequestError
 from datasets import load_dataset
 from google import genai
 from google.auth import default, transport
@@ -191,10 +191,15 @@ class AnthropicService(InferenceService):
         self, model: str, messages: list[dict[str, str]], n=1, **kwargs
     ) -> list[str]:
         body = anthropic_params(model, messages, **kwargs)
-        resps = await asyncio.gather(
-            *(self.client.messages.create(**body) for _ in range(n))
-        )
-        return [anthropic_text(r) for r in resps]
+        return list(await asyncio.gather(*(self.create(body) for _ in range(n))))
+
+    async def create(self, body) -> str:
+        try:
+            return anthropic_text(await self.client.messages.create(**body))
+        except BadRequestError as e:  # output-side content filter is a 400, not a refusal
+            if "content filtering" in str(e):
+                return REFUSED
+            raise
 
 
 class AnthropicVertexService(AnthropicService):

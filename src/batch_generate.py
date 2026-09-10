@@ -136,6 +136,10 @@ def fetch_results(manifest, raw_path):
                 id_, k = calls[int(r.custom_id[1:])]
                 if r.result.type == "succeeded":
                     texts[id_][k] = anthropic_text(r.result.message)
+                elif r.result.type == "errored" and "content filtering" in str(
+                    r.result.error
+                ):
+                    texts[id_][k] = REFUSED
         return texts
     client = openai.OpenAI()
     b = client.batches.retrieve(manifest["batch_id"])
