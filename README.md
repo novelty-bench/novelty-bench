@@ -199,26 +199,3 @@ If you have any questions, please create an issue. Otherwise, you can also conta
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
-
-## Evaluation fixes and historical results
-
-New runs correct the `distinct` field and only reuse cached results when the
-inputs and settings match. Judge and generation failures now stop the run instead
-of becoming novelty or empty answers; existing output is preserved on failure.
-The short-answer word-overlap shortcut has been removed, so new classifier runs
-can differ from published partitions on short answers.
-
-The utility formula is unchanged. A one-time correction updates `distinct` in
-historical evaluation rows to the actual class count. Four historical summaries
-(Gemini and CrPO, both splits) also increase `mean_distinct` by exactly 1;
-the other four summaries already used the correct count. Partitions, response
-scores, and utility values are unchanged. Tests verify the corrected counts and
-all eight summaries against 4,400 saved score rows.
-
-Vertex providers accept `--project` (or `GOOGLE_CLOUD_PROJECT`) and `--region`.
-OpenAI accepts `OPENAI_API_KEY` when no local `openai-api-key` file is present.
-Classifier training writes a complete model and tokenizer under
-`models/similarity-classifier`; the evaluator reads that directory by default.
-
-Run the offline regression tests with `python -m unittest discover -s tests`.
