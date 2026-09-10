@@ -63,9 +63,9 @@ def openai_text(completion) -> str:
     if choice.finish_reason == "content_filter" or choice.message.refusal:
         return REFUSED
     text = choice.message.content or ""
-    if not text.strip() and choice.finish_reason == "length":
-        return EMPTY
-    return text
+    # an empty visible answer is an answer, whatever the finish reason: record the
+    # placeholder rather than retrying a prompt the model keeps declining to fill
+    return text if text.strip() else EMPTY
 
 
 def anthropic_params(
@@ -101,9 +101,7 @@ def anthropic_text(message) -> str:
     if message.stop_reason == "refusal":
         return REFUSED
     text = "".join(block.text for block in message.content if block.type == "text")
-    if not text.strip() and message.stop_reason == "max_tokens":
-        return EMPTY
-    return text
+    return text if text.strip() else EMPTY
 
 
 class OpenAIService(InferenceService):

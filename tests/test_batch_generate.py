@@ -132,6 +132,16 @@ class ParamTests(unittest.TestCase):
         )
         self.assertEqual(inference.anthropic_text(msg), "ok")
 
+    def test_empty_answer_is_a_placeholder_whatever_the_stop_reason(self):
+        choice = SimpleNamespace(
+            finish_reason="stop", message=SimpleNamespace(content="  ", refusal=None)
+        )
+        self.assertEqual(
+            inference.openai_text(SimpleNamespace(choices=[choice])), inference.EMPTY
+        )
+        msg = SimpleNamespace(stop_reason="end_turn", content=[])
+        self.assertEqual(inference.anthropic_text(msg), inference.EMPTY)
+
     def test_exhausted_budget_is_a_placeholder(self):
         choice = SimpleNamespace(
             finish_reason="length", message=SimpleNamespace(content=None, refusal=None)
