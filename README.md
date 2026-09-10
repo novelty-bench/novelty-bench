@@ -85,6 +85,50 @@ responses carry their distinguishing content late — later turns, rebuttals,
 conclusions — the partition may under-count distinct responses, and results are
 best interpreted as a judgement about the opening of each response.
 
+### Adding a model (v1.1 protocol)
+
+Generation protocol for v1.1 submissions: 10 generations per prompt,
+`--max-tokens 2048` (visible output; thinking is budgeted separately), reasoning
+models at `--reasoning-effort low` with sampling parameters unset, other models at
+temperature 1.0. Submissions made before v1.1 were generated at `max_tokens 512`,
+which truncated 20–55% of responses for most models. Two sampling modes are
+reported: `regenerate` (independent samples) and `in-context` (each sample is
+asked for in the same conversation after the previous ones).
+
+1. Generate. `regenerate` runs can go through the provider's batch API at half
+   price; `in-context` is sequential, so run it live (the Anthropic client puts a
+   cache breakpoint on the latest turn, so the growing prefix is cached; OpenAI
+   caches prefixes automatically).
+
+   ```shell
+   # regenerate, batched: submit, then poll status, then collect
+   python src/batch_generate.py submit  --model claude-opus-5 --data curated --reasoning-effort low --eval-dir evaluation/<date>_claude-opus-5/nb-curated
+   python src/batch_generate.py collect --model claude-opus-5 --data curated --reasoning-effort low --eval-dir evaluation/<date>_claude-opus-5/nb-curated
+   # in-context, live
+   python src/inference.py --mode anthropic --model claude-opus-5 --data curated --sampling in-context --max-tokens 2048 --reasoning-effort low --concurrent-requests 8 --eval-dir evaluation/<date>_claude-opus-5_in-context/nb-curated
+   ```
+   `--mode openai` for OpenAI models (`gpt-5.6-*`, `gpt-6-*`); `anthropic` uses the
+   Anthropic API directly, `anthropic-vertex` the Vertex endpoint. Rows carry
+   `generation_config`, so a live run and a batch collect recognise each other's
+   output and an interrupted run resumes.
+
+2. Partition with the v1.1 judge (`gpt-5.6-luna`, set-level, live):
+
+   ```shell
+   python src/partition.py --version 1.1 --judge-model gpt-5.6-luna --concurrency 32 --eval-dir evaluation/<date>_<model>/nb-*
+   ```
+
+3. Score class heads with `claude-opus-5` through the Batches API, then summarise:
+
+   ```shell
+   python src/batch.py submit  --stage score --eval-dir evaluation/<date>_<model>/nb-*
+   python src/batch.py collect --stage score --eval-dir evaluation/<date>_<model>/nb-*
+   python src/summarize.py --version 1.1 --eval-dir evaluation/<date>_<model>/nb-curated
+   ```
+
+Repeat for `nb-wildchat`. Submit `generations.jsonl` and `v1.1/{partitions,scores}.jsonl`
+plus `v1.1/summary.json` per split.
+
 ### Full Worked Example
 
 For example, to run gemma-3-1b-it from start to finish:
@@ -159,8 +203,10 @@ uv run python src/summarize.py --eval-dir results/$SPLIT/$MODEL_NAME
 
 - `src/`: Core source code
   - `inference.py`: Handles generation from various LLM providers
+  - `batch_generate.py`, `batch.py`: Generation and judge stages through the OpenAI / Anthropic batch APIs
+  - `judge.py`: Structured-output judge calls shared by live and batch paths
   - `partition.py`: Implements response partitioning algorithms
-  - `score.py`: Computes utility scores using reward model
+  - `score.py`: Scores class heads (LLM judge in v1.1, reward model in v1.0)
   - `summarize.py`: Summarize evaluation results
 - `data/`: Contains curated and wildchat datasets, human annotations, and classifier training data
 - `evaluation/`: Contains evaluation results for leaderboard participation. We have provided an example submission.
