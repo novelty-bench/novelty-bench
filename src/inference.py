@@ -1,23 +1,21 @@
 import argparse
 import asyncio
-import json
 import os
 import time
 from abc import ABC, abstractmethod
 
 import cohere
 import torch
-from aiofiles import open as aio_open
 from anthropic import AsyncAnthropicVertex
 from datasets import load_dataset
 from google import genai
 from google.auth import default, transport
 from google.genai import types
 from openai import AsyncOpenAI
-from tqdm.auto import tqdm
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from src.common import oai_client
+from src.common import google_project, oai_client
+from src.evaluation_io import cached_rows, evaluation_key, write_rows
 
 
 class InferenceService(ABC):
@@ -80,33 +78,43 @@ class GeminiService(InferenceService):
     async def generate(
         self, model: str, messages: list[dict[str, str]], n=1, max_tokens=512, **kwargs
     ) -> list[str]:
+        system = "\n\n".join(
+            msg["content"] for msg in messages if msg["role"] == "system"
+        )
         contents = [
             types.Content(
                 parts=[types.Part(text=msg["content"])],
                 role="user" if msg["role"] == "user" else "model",
             )
             for msg in messages
+            if msg["role"] != "system"
         ]
         responses = []
         for _ in range(n):
             resp = await self.client.aio.models.generate_content(
                 model=model,
                 contents=contents,
-                config=genai.types.GenerateContentConfig(
-                    max_output_tokens=max_tokens, **kwargs
+                config=types.GenerateContentConfig(
+                    max_output_tokens=max_tokens,
+                    system_instruction=system or None,
+                    **kwargs,
                 ),
             )
-            if resp.candidates:
-                responses.append(resp.candidates[0].content.parts[0].text)
-            else:
-                responses.append("[Blocked]")
-
+            if not resp.candidates or not resp.candidates[0].content:
+                raise ValueError("Gemini returned no answer content")
+            parts = resp.candidates[0].content.parts or []
+            text = "".join(part.text for part in parts if part.text and not part.thought)
+            if not text.strip():
+                raise ValueError("Gemini returned no answer text")
+            responses.append(text)
         return responses
 
 
 class AnthropicService(InferenceService):
-    def __init__(self):
-        self.client = AsyncAnthropicVertex(region="us-east5", project_id="GOOGLE-CLOUD-PROJECT-ID")
+    def __init__(self, project=None, region="us-east5"):
+        self.client = AsyncAnthropicVertex(
+            region=region, project_id=google_project(project)
+        )
 
     async def generate(
         self, model: str, messages: list[dict[str, str]], n=1, **kwargs
@@ -120,28 +128,34 @@ class AnthropicService(InferenceService):
                     messages=messages[1:],
                     **kwargs,
                 )
-                responses.append(resp.content[0].text)
+                responses.append(
+                    "".join(block.text for block in resp.content if block.type == "text")
+                )
             else:
                 resp = await self.client.messages.create(
                     model=model, messages=messages, **kwargs
                 )
-                responses.append(resp.content[0].text)
+                responses.append(
+                    "".join(block.text for block in resp.content if block.type == "text")
+                )
         return responses
 
 
 class VertexService(InferenceService):
-    def __init__(self):
+    def __init__(self, project=None, region="us-central1"):
+        self.project = project
+        self.region = region
         self.client, self.last_refreshed = self.refresh_client()
 
     def refresh_client(self):
-        model_location = "us-central1"
-        project_id = "GOOGLE-CLOUD-PROJECT-ID"
-        credentials, _ = default()
+        model_location = self.region
+        credentials, default_project = default()
+        project_id = google_project(self.project, default_project)
         auth_request = transport.requests.Request()
         credentials.refresh(auth_request)
 
         client = AsyncOpenAI(
-            base_url=f"https://{model_location}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{model_location}/endpoints/openapi/chat/completions?",
+            base_url=f"https://{model_location}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{model_location}/endpoints/openapi/",
             api_key=credentials.token,
         )
         return client, time.time()
@@ -175,126 +189,91 @@ class TransformersService(InferenceService):
         self.tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
         try:
             self.model = AutoModelForCausalLM.from_pretrained(
-                model, 
+                model,
                 trust_remote_code=True,
                 dtype=torch.bfloat16,
                 device_map="auto",
-                attn_implementation="flash_attention_2"  # Use flash attention if available
+                attn_implementation="flash_attention_2",  # Use flash attention if available
             )
-        except:
+        except (ImportError, ValueError):
             print("Flash attention not available, falling back to eager attention")
             self.model = AutoModelForCausalLM.from_pretrained(
-                model, 
+                model,
                 trust_remote_code=True,
                 dtype=torch.bfloat16,
                 device_map="auto",
                 attn_implementation="eager",
-                stop=["<|end_of_text|>", "<eos>", "<end_of_turn>"] # need to be overridden for other models
             )
-        
+
         # Set pad token if it doesn't exist
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-            
+
         print(f"Model loaded on device: {self.model.device}")
         print(f"Model memory footprint: {self.model.get_memory_footprint() / 1e9:.2f} GB")
-        print(f"Model loaded successfully!")
+        print("Model loaded successfully!")
 
     async def generate(
-        self, model: str, messages: list[dict[str, str]], n=1, max_tokens=512, temperature=1.0, stop=None, **kwargs
+        self,
+        model: str,
+        messages: list[dict[str, str]],
+        n=1,
+        max_tokens=512,
+        temperature=1.0,
+        stop=None,
+        **kwargs,
     ) -> list[str]:
         # Run the actual generation in a thread to avoid blocking
         import asyncio
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._generate_sync, messages, n, max_tokens, temperature, stop, kwargs)
-    
-    def _generate_sync(self, messages, n, max_tokens, temperature, stop, kwargs):
-        # Apply chat template to convert messages to a prompt
-        try:
-            # prompt = self.tokenizer.apply_chat_template(
-            #     messages, tokenize=False, add_generation_prompt=True
-            # )
-            inputs = self.tokenizer.apply_chat_template(
-                messages, add_generation_prompt=True, return_tensors="pt", padding=False, truncation=True, max_length=4000
-            )
-        except Exception as e:
-            print(f"Chat template failed: {e}, using fallback")
-            raise Exception(f"Chat template failed: {e}")
 
-        inputs = inputs.to(self.model.device)
-        
-        # Use batch generation for efficiency if n > 1
-        if n > 1 and hasattr(self.model, 'generate') and temperature > 0:
-            # print(f"Generating {n} responses in batch...")
-            with torch.no_grad():
-                input_ids = inputs.repeat(n, 1)
-                attention_mask = torch.ones_like(input_ids)
-                # Generate all responses in a single batch call
-                outputs = self.model.generate(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    max_new_tokens=max_tokens,
-                    temperature=temperature,
-                    do_sample=True,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    eos_token_id=self.tokenizer.eos_token_id,
-                    use_cache=True,  # Enable KV cache for faster generation
-                    **kwargs
-                )
-                
-                # Decode all responses
-                responses = []
-                input_length = input_ids.shape[1]
-                for i in range(n):
-                    generated_tokens = outputs[i][input_length:]
-                    response = self.tokenizer.decode(generated_tokens, skip_special_tokens=False)
-                    
-                    # Apply stop sequences
-                    if stop:
-                        for stop_seq in stop:
-                            if stop_seq in response:
-                                response = response.split(stop_seq)[0]
-                    
-                    response = response.strip()
-                    responses.append(response)
-        else:
-            # Sequential generation for n=1 or when batch generation isn't suitable
-            responses = []
-            for i in range(n):
-                print(f"Generating response {i+1}/{n}...")
-                with torch.no_grad():
-                    outputs = self.model.generate(
-                        **inputs,
-                        max_new_tokens=max_tokens,
-                        temperature=temperature,
-                        do_sample=True if temperature > 0 else False,
-                        pad_token_id=self.tokenizer.pad_token_id,
-                        eos_token_id=self.tokenizer.eos_token_id,
-                        use_cache=True,  # Enable KV cache
-                        **kwargs
-                    )
-                    
-                    # Decode only the generated part
-                    generated_tokens = outputs[0][inputs['input_ids'].shape[1]:]
-                    response = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
-                    
-                    # Apply stop sequences
-                    if stop:
-                        for stop_seq in stop:
-                            if stop_seq in response:
-                                response = response.split(stop_seq)[0]
-                    
-                    response = response.strip()
-                    responses.append(response)
-                    print(f"Generated: {response[:100]}...")
-        
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, self._generate_sync, messages, n, max_tokens, temperature, stop, kwargs
+        )
+
+    def _generate_sync(self, messages, n, max_tokens, temperature, stop, kwargs):
+        if n < 1:
+            raise ValueError("n must be positive")
+        inputs = self.tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            return_tensors="pt",
+            return_dict=True,
+            padding=False,
+            truncation=True,
+            max_length=4000,
+        ).to(self.model.device)
+        batch = {key: value.repeat(n, 1) for key, value in inputs.items()}
+        options = dict(kwargs)
+        if temperature > 0:
+            options["temperature"] = temperature
+        with torch.inference_mode():
+            outputs = self.model.generate(
+                **batch,
+                max_new_tokens=max_tokens,
+                do_sample=temperature > 0,
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
+                use_cache=True,
+                **options,
+            )
+        input_length = batch["input_ids"].shape[1]
+        responses = []
+        for output in outputs:
+            response = self.tokenizer.decode(
+                output[input_length:], skip_special_tokens=True
+            )
+            for stop_seq in [stop] if isinstance(stop, str) else stop or []:
+                if stop_seq:
+                    response = response.split(stop_seq, 1)[0]
+            responses.append(response.strip())
         return responses
-    
+
     def cleanup(self):
         # Clean up GPU memory
-        if hasattr(self, 'model'):
+        if hasattr(self, "model"):
             del self.model
-        if hasattr(self, 'tokenizer'):
+        if hasattr(self, "tokenizer"):
             del self.tokenizer
         torch.cuda.empty_cache()
         print("Done!")
@@ -309,6 +288,18 @@ async def run_generation(
     sampling: str,
     max_retries: int = 10,
 ) -> list[str]:
+    if num_generations < 1 or max_retries < 1:
+        raise ValueError("Generation count and retry count must be positive")
+    if sampling not in {"regenerate", "in-context", "paraphrase", "system-prompt"}:
+        raise ValueError("Unknown sampling method " + sampling)
+    if sampling == "paraphrase" and (
+        not prompt_paraphrases
+        or len(prompt_paraphrases) != num_generations
+        or any(not isinstance(p, str) or not p.strip() for p in prompt_paraphrases)
+    ):
+        raise ValueError(
+            "Paraphrase sampling requires one nonempty paraphrase per generation"
+        )
     responses = []
     messages = [{"role": "user", "content": prompt}]
     for attempt in range(max_retries):
@@ -331,6 +322,7 @@ async def run_generation(
                         max_tokens=512,
                         temperature=1.0,
                     )
+                    validate_generations(response, 1)
                     new_response = response[0]
                     responses.append(new_response)
                     messages.append({"role": "assistant", "content": new_response})
@@ -342,7 +334,6 @@ async def run_generation(
                     )
 
             elif sampling == "paraphrase":
-                assert prompt_paraphrases and len(prompt_paraphrases) == num_generations
                 while len(responses) < num_generations:
                     messages = [
                         {"role": "user", "content": prompt_paraphrases[len(responses)]}
@@ -353,6 +344,7 @@ async def run_generation(
                         max_tokens=512,
                         temperature=1.0,
                     )
+                    validate_generations(response, 1)
                     new_response = response[0]
                     responses.append(new_response)
 
@@ -374,6 +366,7 @@ async def run_generation(
             else:
                 raise Exception("Unknown mode " + sampling)
 
+            validate_generations(responses, num_generations)
             return responses
 
         except Exception as e:
@@ -382,7 +375,9 @@ async def run_generation(
                     f"Error generating response for prompt '{prompt}' after {max_retries} attempts: {e}",
                     flush=True,
                 )
-                return []
+                raise RuntimeError(
+                    f"Generation failed after {max_retries} attempts"
+                ) from e
 
             # Exponential backoff
             wait_time = min(5 * 2**attempt, 60)  # 5, 10, 20, 40, 60, 60, ... seconds
@@ -393,6 +388,13 @@ async def run_generation(
             await asyncio.sleep(wait_time)
 
 
+def validate_generations(generations, expected):
+    if not isinstance(generations, list) or len(generations) != expected:
+        raise ValueError(f"Expected {expected} responses")
+    if any(not isinstance(text, str) or not text.strip() for text in generations):
+        raise ValueError("Every response must contain nonempty text")
+
+
 async def process_prompts(
     prompts,
     service,
@@ -401,32 +403,51 @@ async def process_prompts(
     num_generations,
     concurrent_requests,
     sampling,
+    mode=None,
 ):
-    """Processes all prompts concurrently and writes results to a file."""
-    async with aio_open(output_file, "a", buffering=1) as f:
-        semaphore = asyncio.Semaphore(concurrent_requests)
+    """Resume matching generations; keep the previous output on any failure."""
+    if num_generations < 1 or concurrent_requests < 1:
+        raise ValueError("Generation count and concurrency must be positive")
+    prompts = list(prompts)
+    existing = cached_rows(output_file)
+    config = {
+        "stage": "generation",
+        "version": 2,
+        "model": model,
+        "mode": mode or type(service).__name__,
+        "sampling": sampling,
+        "num_generations": num_generations,
+        "temperature": 1.0,
+        "max_tokens": 512,
+    }
+    semaphore = asyncio.Semaphore(concurrent_requests)
 
-        async def process_single_prompt(prompt):
-            async with semaphore:
-                generations = await run_generation(
-                    service,
-                    model,
-                    prompt["prompt"],
-                    prompt.get("prompt_paraphrases"),
-                    num_generations,
-                    sampling,
-                )
-                return {
-                    "id": prompt["id"],
-                    "prompt": prompt["prompt"],
-                    "model": model,
-                    "generations": generations,
-                }
+    async def process_single_prompt(prompt):
+        key = evaluation_key(prompt, config)
+        cached = existing.get(prompt["id"], {})
+        if cached.get("generation_key") == key:
+            validate_generations(cached["generations"], num_generations)
+            return {**prompt, **cached}
+        async with semaphore:
+            generations = await run_generation(
+                service,
+                model,
+                prompt["prompt"],
+                prompt.get("prompt_paraphrases"),
+                num_generations,
+                sampling,
+            )
+        validate_generations(generations, num_generations)
+        return {
+            **prompt,
+            "model": model,
+            "generations": generations,
+            "generation_key": key,
+            "generation_config": config,
+        }
 
-        tasks = [process_single_prompt(prompt) for prompt in prompts]
-        for task in tqdm(asyncio.as_completed(tasks), total=len(prompts)):
-            result = await task
-            await f.write(json.dumps(result) + "\n")
+    results = await asyncio.gather(*(process_single_prompt(prompt) for prompt in prompts))
+    write_rows(output_file, results)
 
 
 async def main():
@@ -474,7 +495,11 @@ async def main():
         default=10,
         help="Number of concurrent requests",
     )
+    parser.add_argument("--project", help="Google Cloud project for Vertex providers")
+    parser.add_argument("--region", help="Google Cloud region for Vertex providers")
     args = parser.parse_args()
+    if args.num_generations < 1 or args.concurrent_requests < 1:
+        parser.error("--num-generations and --concurrent-requests must be positive")
 
     dataset = load_dataset("yimingzhang/novelty-bench", split=args.data)
     eval_dir = (
@@ -482,29 +507,6 @@ async def main():
     )
     os.makedirs(eval_dir, exist_ok=True)
     output_file = os.path.join(eval_dir, "generations.jsonl")
-
-    if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-        dataset_keys = set(dataset["id"])
-        existing_output = load_dataset("json", data_files=output_file, split="train")
-        existing_output = existing_output.filter(
-            lambda x: len(x["generations"]) == args.num_generations
-            and x["id"] in dataset_keys
-        )
-
-        # Save filtered dataset back to output file
-        with open(output_file, "w") as f:
-            for item in existing_output:
-                f.write(json.dumps(item) + "\n")
-
-        existing_keys = set(existing_output["id"])
-        # Filter dataset to only include missing or invalid items
-        dataset = dataset.filter(lambda x: x["id"] not in existing_keys)
-
-        if len(dataset) == 0:
-            print("All prompts have valid generations. Skipping.")
-            return
-        else:
-            print(f"Generating {len(dataset)} missing or invalid entries.")
 
     concurrent_requests = args.concurrent_requests
     if args.mode == "vllm":
@@ -518,9 +520,9 @@ async def main():
     elif args.mode == "gemini":
         service = GeminiService()
     elif args.mode == "anthropic":
-        service = AnthropicService()
+        service = AnthropicService(args.project, args.region or "us-east5")
     elif args.mode == "vertex":
-        service = VertexService()
+        service = VertexService(args.project, args.region or "us-central1")
     elif args.mode == "deepseek":
         service = DeepSeekService()
     elif args.mode == "transformers":
@@ -538,6 +540,7 @@ async def main():
             args.num_generations,
             concurrent_requests,
             args.sampling,
+            mode=args.mode,
         )
 
     finally:

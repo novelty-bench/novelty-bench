@@ -1,23 +1,21 @@
 import asyncio
+import functools
 import os
 
 import pandas as pd
-import tiktoken
 from datasets import load_dataset
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from tqdm.auto import tqdm
 
-
-def oai_client():
-    with open("openai-api-key") as file:
-        return AsyncOpenAI(api_key=file.read().strip())
+from src.common import oai_client
 
 
-openai_client = oai_client()
-llama_guard_client = AsyncOpenAI(
-    api_key="EMPTY", base_url=f"http://localhost:{os.environ['VLLM_PORT']}/v1"
-)
+@functools.cache
+def clients():
+    return oai_client(), AsyncOpenAI(
+        api_key="EMPTY", base_url=f"http://localhost:{os.environ['VLLM_PORT']}/v1"
+    )
 
 
 SYS_PROMPT = """You are helping select prompts for a benchmark that measures language models' ability to generate diverse, high-quality alternative answers. For a prompt to qualify, it should:
@@ -27,9 +25,6 @@ SYS_PROMPT = """You are helping select prompts for a benchmark that measures lan
 4. Make a single clearly interpretable request. For example, "recommend a reliable espresso machine" is clear, while "espresso machine" is not.
 
 Classify the following prompt based on these criteria, and format the provided prompt. Output using the provided JSON format."""
-
-
-gpt4_tokenizer = tiktoken.encoding_for_model("gpt-4o")
 
 
 class PromptClassification(BaseModel):
@@ -51,6 +46,7 @@ class PromptClassification(BaseModel):
 async def classify_prompt(instance: dict) -> dict:
     """Classifies a single prompt and returns the result."""
     prompt = instance["prompt"]
+    openai_client, llama_guard_client = clients()
     is_safe = (
         await llama_guard_client.chat.completions.create(
             model="meta-llama/Llama-Guard-3-8B",
@@ -87,14 +83,7 @@ async def classify_prompt(instance: dict) -> dict:
             "meta": {"response": parsed.model_dump()},
         }
     except Exception as e:
-        print(f"Error processing prompt '{prompt}': {e}")
-        return instance | {
-            "chosen": False,
-            "prompt": prompt,
-            "original_prompt": prompt,
-            "safety": is_safe,
-            "meta": {"error": str(e)},
-        }
+        raise RuntimeError(f"Classification failed for {instance['id']}") from e
 
 
 async def process_prompts(instances) -> list[dict]:
@@ -117,14 +106,23 @@ async def process_prompts(instances) -> list[dict]:
     return results
 
 
+def select_prompts(data, count=1000, seed=1589180485):
+    eligible = data[data["chosen"]].sort_values("id")
+    if eligible["id"].duplicated().any():
+        raise ValueError("Duplicate prompt IDs")
+    if len(eligible) < count:
+        raise ValueError(f"Need {count} eligible prompts; found {len(eligible)}")
+    return eligible.sample(n=count, random_state=seed)
+
+
 async def main():
     instances = load_dataset("json", data_files="data/wildchat/5k.jsonl", split="train")
     results = await process_prompts(instances)
     data = pd.DataFrame(results)
     data = data.sort_values(by="id")
-    data.to_json("data/wildchat/5k-filtered.jsonl", orient="records")
+    data.to_json("data/wildchat/5k-filtered.jsonl", orient="records", lines=True)
 
-    chosen = data[data["chosen"]].sample(frac=1.0).head(1000)
+    chosen = select_prompts(data)
     chosen.to_json("data/wildchat-1k.jsonl", lines=True, orient="records")
 
 

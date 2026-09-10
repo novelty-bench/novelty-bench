@@ -1,14 +1,10 @@
 import argparse
 import asyncio
 import functools
-import json
 import os
 
-import datasets
-import numpy as np
 import sacrebleu
 import torch
-from aiofiles import open as aio_open
 from datasets import load_dataset
 from evaluate import load
 from pydantic import BaseModel
@@ -17,13 +13,21 @@ from tqdm.auto import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from src.common import oai_client
+from src.evaluation_io import cached_rows, evaluation_key, write_rows
 
 CONCURRENT_REQUESTS = 1
 
-client = oai_client()
-
 rouge_scorer = rouge_scorer.RougeScorer(["rouge1"])
-bertscorer = load("bertscore")
+
+
+@functools.cache
+def load_judge_client():
+    return oai_client()
+
+
+@functools.cache
+def load_bertscorer():
+    return load("bertscore")
 
 
 @functools.cache
@@ -50,14 +54,13 @@ async def rouge1(prompt: str, s1: str, s2: str):
 
 
 async def bertscore(prompt: str, s1: str, s2: str):
-    return bertscorer.compute(
+    return load_bertscorer().compute(
         predictions=[s1],
         references=[s2],
         model_type="microsoft/deberta-large",
     )["f1"][0]
 
 
-@torch.inference_mode()
 async def classifier_score(prompt: str, s1: str, s2: str):
     tokenizer, model = load_deberta_tokenizer_and_model()
     input_ids = [tokenizer.cls_token_id]
@@ -78,7 +81,8 @@ async def classifier_score(prompt: str, s1: str, s2: str):
     iids = torch.tensor(input_ids, device=DEVICE, dtype=torch.int64)
     tids = torch.tensor(token_type_ids, device=DEVICE, dtype=torch.int64)
 
-    outputs = model(input_ids=iids.unsqueeze(0), token_type_ids=tids.unsqueeze(0))
+    with torch.inference_mode():
+        outputs = model(input_ids=iids.unsqueeze(0), token_type_ids=tids.unsqueeze(0))
     score = outputs["logits"].softmax(-1)[0, 1]
     return score.cpu().item()
 
@@ -105,18 +109,17 @@ async def equivalence_check_gpt4(prompt: str, response_0: str, response_1: str) 
         },
     ]
 
-    try:
-        response = await client.beta.chat.completions.parse(
-            model="gpt-4o",
-            messages=messages,
-            max_tokens=10,
-            temperature=0,
-            response_format=Equivalence,
-        )
-        return response.choices[0].message.parsed.equivalent
-    except Exception as e:
-        print(f"Error in equivalence check: {e}")
-        return False
+    response = await load_judge_client().beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=messages,
+        max_tokens=64,
+        temperature=0,
+        response_format=Equivalence,
+    )
+    parsed = response.choices[0].message.parsed
+    if parsed is None:
+        raise ValueError("Equivalence judge returned no parsed result")
+    return parsed.equivalent
 
 
 async def equivalence_check_unigram(
@@ -131,17 +134,14 @@ async def equivalence_check_bertscore(
     response_1: str,
 ) -> bool:
     scores = await bertscore(prompt, response_0, response_1)
-    return scores["f1"][0] > 0.719
+    return scores > 0.719
 
 
 def maybe_test_equality(response_0: str, response_1: str) -> bool | None:
-    unigram_0 = response_0.strip().lower().split()
-    unigram_1 = response_1.strip().lower().split()
-    max_len = max(len(unigram_0), len(unigram_1))
-    if max_len <= 5:
-        common_unigrams = set(unigram_0) & set(unigram_1)
-        return len(common_unigrams) * 2 >= max_len
-
+    # Only exact text equality is a safe shortcut: overlap can merge opposites
+    # such as "do it" / "do not do it". Preserve case and whitespace semantics.
+    if response_0 == response_1:
+        return True
     return None
 
 
@@ -163,6 +163,8 @@ async def partition_responses(
     equivalence_alg,
 ) -> list[int]:
     """Partitions responses into equivalence classes."""
+    if not responses:
+        raise ValueError("At least one response is required")
     equivalence_classes = []
     partition = [-1] * len(responses)
 
@@ -197,34 +199,33 @@ EQUIVALENCE_ALGS = {
 
 
 async def process_instances(instances, output_file, equivalence_alg):
-    """Processes all instances concurrently and writes results to a file."""
-    # Check if file exists and has matching keys
-    if os.path.exists(output_file):
-        try:
-            existing_output = load_dataset("json", data_files=output_file, split="train")
-            if not set(instances["id"]) - set(existing_output["id"]):
-                print("All prompts have been partitioned. Skipping.")
-                return
-        except datasets.exceptions.DatasetGenerationError:
-            ...
+    """Reuse only matching inputs/configuration; preserve output on failures."""
+    existing = cached_rows(output_file)
+    config = {"stage": "partition", "version": 2, "algorithm": equivalence_alg.__name__}
+    semaphore = asyncio.Semaphore(CONCURRENT_REQUESTS)
 
-    async with aio_open(output_file, "w", buffering=1) as f:
-        semaphore = asyncio.Semaphore(CONCURRENT_REQUESTS)
+    async def process_single_instance(instance):
+        key = evaluation_key(instance, config)
+        cached = existing.get(instance["id"], {})
+        if cached.get("partition_key") == key:
+            return {**instance, **cached}
+        async with semaphore:
+            partition = await partition_responses(
+                instance["prompt"], instance["generations"], equivalence_alg
+            )
+            return {
+                **instance,
+                "partition": partition,
+                "distinct": len(set(partition)),
+                "partition_key": key,
+                "partition_config": config,
+            }
 
-        async def process_single_instance(instance):
-            async with semaphore:
-                partition = await partition_responses(
-                    instance["prompt"],
-                    instance["generations"],
-                    equivalence_alg,
-                )
-                return {**instance, "partition": partition, "distinct": max(partition)}
-
-        tasks = [process_single_instance(instance) for instance in instances]
-
-        for task in tqdm(asyncio.as_completed(tasks), total=len(instances)):
-            result = await task
-            await f.write(json.dumps(result) + "\n")
+    tasks = [process_single_instance(instance) for instance in instances]
+    results = []
+    for task in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
+        results.append(await task)
+    write_rows(output_file, results)
 
 
 async def main():
