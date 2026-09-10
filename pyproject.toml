@@ -7,7 +7,7 @@ name = "novelty-bench"
 version = "0.1.0"
 description = "A benchmarking tool for evaluating language models"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 dependencies = [
     "openai",
@@ -27,6 +27,7 @@ dependencies = [
     "transformers",
     "sacrebleu",
     "accelerate",
+    "scikit-learn",
 ]
 
 [tool.ruff]

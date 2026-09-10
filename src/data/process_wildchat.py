@@ -1,7 +1,13 @@
+import functools
+from pathlib import Path
+
 import tiktoken
 from datasets import load_dataset
 
-gpt4_tokenizer = tiktoken.encoding_for_model("gpt-4o")
+
+@functools.cache
+def tokenizer():
+    return tiktoken.encoding_for_model("gpt-4o")
 
 
 def process_wildchat_instance(x: dict) -> dict:
@@ -18,7 +24,7 @@ def filter_wildchat_instance(x: dict) -> bool:
     return (
         x["language"] == "English"
         and (not x["redacted"])
-        and 5 <= len(gpt4_tokenizer.encode(prompt, disallowed_special=())) <= 200
+        and 5 <= len(tokenizer().encode(prompt, disallowed_special=())) <= 200
     )
 
 
@@ -31,15 +37,21 @@ def main():
     )
 
     subset_df = subset.to_pandas().drop_duplicates(["id", "prompt"])
-    subset_df.to_json("data/wildchat/5k.jsonl", lines=True, orient="records")
+    write_splits(subset_df)
+
+
+def write_splits(subset_df, output_dir="data/wildchat"):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    subset_df.iloc[:5000].to_json(output_dir / "5k.jsonl", lines=True, orient="records")
     subset_df.iloc[0:5000].to_json(
-        "data/wildchat/benchmark-no-labels.jsonl", lines=True, orient="records"
+        output_dir / "benchmark-no-labels.jsonl", lines=True, orient="records"
     )
     subset_df.iloc[5000:5100].to_json(
-        "data/wildchat/dev-no-labels.jsonl", lines=True, orient="records"
+        output_dir / "dev-no-labels.jsonl", lines=True, orient="records"
     )
     subset_df.iloc[5100:5200].to_json(
-        "data/wildchat/test-no-labels.jsonl", lines=True, orient="records"
+        output_dir / "test-no-labels.jsonl", lines=True, orient="records"
     )
 
 

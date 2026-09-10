@@ -14,5 +14,5 @@ anthropic[vertex]
 scikit-learn
 accelerate>=0.26.0
 sacrebleu
-flash-attn --no-build-isolation
+# Optional flash attention: install separately with pip install flash-attn --no-build-isolation
 
