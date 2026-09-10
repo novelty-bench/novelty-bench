@@ -138,12 +138,13 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(scorer.await_count, 1)
             self.assertEqual(cached_rows(path)["a"]["utility"], 5)
 
-    async def test_llm_scores_cap_invalid_responses(self):
-        out = score.Scores(
-            items=[
-                score.Verdict(valid=True, score=9),
-                score.Verdict(valid=False, score=8),
-            ]
-        )
-        with patch.object(score, "judge", AsyncMock(return_value=out)):
-            self.assertEqual(await score.score_llm("p", ["a", "b"], "m"), [9, 3])
+    async def test_llm_scores_each_generation_alone(self):
+        outs = iter([score.Score(score=9), score.Score(score=3)])
+
+        async def fake_judge(model, system, user, schema):
+            self.assertNotIn('index="', user)
+            return next(outs)
+
+        with patch.object(score, "judge", fake_judge):
+            got = await score.score_llm({"prompt": "p", "generations": ["a", "b"]}, "m")
+        self.assertEqual(got, [9, 3])
