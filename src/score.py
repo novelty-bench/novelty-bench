@@ -95,31 +95,44 @@ class Score(BaseModel):
     score: int
 
 
+def heads(partition: list[int]) -> list[int]:
+    """Index of the first generation in each class."""
+    return [i for i, c in enumerate(partition) if c not in partition[:i]]
+
+
 def score_calls(instance: dict, config: dict) -> list[Call]:
-    """One call per generation: each is judged without seeing its siblings."""
+    """One call per class head, each judged without seeing its siblings."""
     return [
         Call(
             SCORE_SYSTEM,
-            f"<prompt>\n{instance['prompt']}\n</prompt>\n\n<response>\n{g}\n</response>",
+            f"<prompt>\n{instance['prompt']}\n</prompt>\n\n<response>\n{instance['generations'][i]}\n</response>",
             Score,
         )
-        for g in instance["generations"]
+        for i in heads(instance["partition"])
     ]
 
 
+def spread(instance: dict, outputs: list) -> list[int | None]:
+    """Head scores in generation order; duplicates are left unscored."""
+    scores = [None] * len(instance["generations"])
+    for i, o in zip(heads(instance["partition"]), outputs, strict=True):
+        if not 1 <= o.score <= 10:
+            raise ValueError(f"score out of range: {o.score}")
+        scores[i] = o.score
+    return scores
+
+
 def score_fold(instance: dict, outputs: list, config: dict) -> dict:
-    scores = [o.score for o in outputs]
-    if not all(1 <= s <= 10 for s in scores):
-        raise ValueError(f"scores out of range: {scores}")
+    scores = spread(instance, outputs)
     return utility_fields(scores, instance["partition"], config["patience"])
 
 
 STAGE = Stage("score", "score_key", score_calls, score_fold)
 
 
-async def score_llm(instance, model) -> list[int]:
+async def score_llm(instance, model) -> list[int | None]:
     outputs = await asyncio.gather(*(judge(model, c) for c in score_calls(instance, {})))
-    return [o.score for o in outputs]
+    return spread(instance, outputs)
 
 
 SCORERS = {
@@ -130,15 +143,11 @@ DEFAULT_SCORER = {"1.0": "rm", "1.1": "llm"}
 
 
 def score_first_occurrences(scores, partition):
-    """The first generation of each class scores; later duplicates score 0."""
-    generation_scores, partition_scores = [], []
-    seen = set()
-    for score, label in zip(scores, partition, strict=True):
-        generation_scores.append(0 if label in seen else score)
-        if label not in seen:
-            partition_scores.append(score)
-            seen.add(label)
-    return generation_scores, partition_scores
+    """The first generation of each class is credited; later duplicates credit 0."""
+    credited = [0] * len(scores)
+    for i in heads(partition):
+        credited[i] = scores[i]
+    return credited, [scores[i] for i in heads(partition)]
 
 
 def utility_fields(scores, partition, patience):

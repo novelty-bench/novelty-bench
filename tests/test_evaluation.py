@@ -139,13 +139,17 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(scorer.await_count, 1)
             self.assertEqual(cached_rows(path)["a"]["utility"], 5)
 
-    async def test_llm_scores_each_generation_alone(self):
+    async def test_llm_scores_class_heads_alone(self):
         outs = iter([score.Score(score=9), score.Score(score=3)])
 
         async def fake_judge(model, call, effort=None):
             self.assertNotIn('index="', call.user)
             return next(outs)
 
+        inst = {"prompt": "p", "generations": ["a", "b", "c"], "partition": [0, 0, 1]}
         with patch.object(score, "judge", fake_judge):
-            got = await score.score_llm({"prompt": "p", "generations": ["a", "b"]}, "m")
-        self.assertEqual(got, [9, 3])
+            got = await score.score_llm(inst, "m")
+        self.assertEqual(got, [9, None, 3])
+        fields = score.utility_fields(got, inst["partition"], 0.8)
+        self.assertEqual(fields["partition_scores"], [9, 3])
+        self.assertEqual(fields["distinct"], 2)
